@@ -102,7 +102,7 @@ Sample sleep row (synthetic):
 ## 安装
 
 ```bash
-git clone https://github.com/shkyyy18/mi-bridge.git mi_fitness_data_bridge
+git clone https://github.com/shkyyy18/mi_fitness_data_bridge.git mi_fitness_data_bridge
 cd mi_fitness_data_bridge
 python -m venv .venv
 ```
