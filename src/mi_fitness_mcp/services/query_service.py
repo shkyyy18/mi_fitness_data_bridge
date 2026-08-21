@@ -387,7 +387,12 @@ class QueryService:
             ]
             method = "none"
 
-        quartiles = statistics.quantiles(bpms, n=4, method="inclusive")
+        if len(bpms) >= 2:
+            # statistics.quantiles(method="inclusive") is linear interpolation.
+            quartiles = statistics.quantiles(bpms, n=4, method="inclusive")
+        else:
+            # A single sample has no meaningful spread; quantiles() would raise.
+            quartiles = [float(bpms[0])] * 3
         stats = {
             "avg": round(statistics.fmean(bpms), 1),
             "min": min(bpms),
@@ -395,7 +400,6 @@ class QueryService:
             "p25": round(quartiles[0], 1),
             "p50": round(quartiles[1], 1),
             "p75": round(quartiles[2], 1),
-            # statistics.quantiles(method="inclusive") is linear interpolation.
             "percentile_method": "linear_interpolation",
         }
 

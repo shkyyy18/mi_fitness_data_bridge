@@ -664,7 +664,9 @@ class MiFitnessCloudAdapter(DataAdapter):
                 user_id=self.user_id or "unknown",
                 timestamp=measured_at,
                 weight_kg=float(payload.get("weight", 0)),
-                bmi=float(payload["bmi"]) if payload.get("bmi") is not None else None,
+                # bmi=0 出现在"只称重"记录里, 与相邻字段一样按未测量处理,
+                # 否则 0 会触发 BodyMeasurement 的 gt=0 校验中断整个生成器。
+                bmi=self._optional_float(payload.get("bmi")),
                 body_fat_pct=self._optional_float(payload.get("body_fat_rate")),
                 muscle_mass_kg=self._optional_float(payload.get("muscle_rate")),
                 water_pct=self._optional_float(payload.get("moisture_rate")),
