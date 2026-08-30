@@ -159,7 +159,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="query_sleep",
-            description="Query sleep sessions",
+            description="Query raw sleep sessions plus main-sleep summary and data quality",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -615,8 +615,14 @@ async def _handle_query_sleep(arguments: dict) -> dict:
         end_date=arguments["end_date"],
         include_naps=arguments.get("include_naps", True),
     )
+    summary = query_service.get_sleep_summary(
+        start_date=arguments["start_date"],
+        end_date=arguments["end_date"],
+    )
     return QueryResponse(
-        status="ok", source="cache", data={"sessions": sessions, "count": len(sessions)}
+        status="ok",
+        source="cache",
+        data={"sessions": sessions, "count": len(sessions), **summary},
     ).model_dump()
 
 

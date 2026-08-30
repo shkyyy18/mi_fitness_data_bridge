@@ -19,6 +19,7 @@ All notable changes to this project will be documented in this file.
 ### Changed
 
 - List queries (`query_heart_rate`, `query_spo2`, `query_stress`, `query_abnormal_heart_beat`) push `limit` down to SQL `LIMIT` instead of loading the full table and slicing in Python, and default to a hard cap of 5000 rows when no limit is given.
+- `query_sleep` preserves its raw start-date session list and adds a wake-date main-sleep summary with coverage, missing-date, duplicate-session, nap, score-availability, and invalid-record quality metadata; missing dates are never averaged as zero sleep.
 - Project renamed to 米桥 / Mi Bridge; README GitHub links point to the new `shkyyy18/mi-bridge` repository name, and the trademark disclaimer is a standalone prominent line.
 - The MIT license text of upstream author Aleksej Kubulashvili is preserved in a NOTICE block at the top of `LICENSE`, with the license history (MIT before 2026-08-03, AGPL-3.0-only after) stated in the README.
 - Dropped the unused `click` and `rich` dependencies.

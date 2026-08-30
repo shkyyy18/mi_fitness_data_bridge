@@ -754,6 +754,25 @@ class Database:
             ).fetchall()
             return [dict(row) for row in rows]
 
+    def query_sleep_sessions_by_end_date(
+        self,
+        user_id: str,
+        start_date: str,
+        end_date: str,
+    ) -> list[dict[str, Any]]:
+        """Query sleep sessions by the local date on which they ended."""
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM sleep_sessions
+                WHERE user_id = ?
+                AND substr(end_at, 1, 10) >= ? AND substr(end_at, 1, 10) <= ?
+                ORDER BY end_at, start_at
+                """,
+                (user_id, start_date, end_date),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
     def query_workouts(
         self,
         user_id: str,

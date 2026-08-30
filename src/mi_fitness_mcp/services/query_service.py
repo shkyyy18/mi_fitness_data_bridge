@@ -3,7 +3,7 @@
 import math
 import statistics
 from contextlib import suppress
-from datetime import datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from itertools import pairwise
 from typing import Any
 
@@ -21,6 +21,9 @@ HARD_MAX_POINTS = 500
 # heart beat) so an agent calling without an explicit limit cannot pull the
 # entire table into memory; the limit is enforced in SQL, not by slicing.
 DEFAULT_QUERY_LIMIT = 5000
+
+MAX_SLEEP_SESSION_MINUTES = 24 * 60
+MAIN_SLEEP_SELECTION_METHOD = "longest_valid_non_nap_per_wake_date_v1"
 
 
 class QueryService:
@@ -177,30 +180,210 @@ class QueryService:
         sessions = []
         for record in records:
             # 不包含小睡时跳过 nap 记录
-            if not include_naps and record.get("is_nap"):
+            if not include_naps and self._sleep_value_is_true(record.get("is_nap")):
                 continue
 
-            session = {
-                "sleep_id": record["sleep_id"],
-                "start_at": record["start_at"],
-                "end_at": record["end_at"],
-                "duration_minutes": record["duration_minutes"],
-                "time_asleep_minutes": record["time_asleep_minutes"],
-                "time_awake_minutes": record["time_awake_minutes"],
-                "sleep_score": record.get("sleep_score"),
-                "is_nap": record.get("is_nap", False),
-            }
-
-            # 如有睡眠阶段信息则解析
-            if record.get("stages"):
-                import json
-
-                with suppress(json.JSONDecodeError):
-                    session["stages"] = json.loads(record["stages"])
-
-            sessions.append(session)
+            sessions.append(self._sleep_session_payload(record))
 
         return sessions
+
+    @staticmethod
+    def _sleep_value_is_true(value: Any) -> bool:
+        return value is True or str(value).lower() in {"1", "true", "yes"}
+
+    @staticmethod
+    def _sleep_datetime(value: Any) -> datetime | None:
+        if isinstance(value, datetime):
+            return value
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+    @classmethod
+    def _sleep_session_payload(cls, record: dict[str, Any]) -> dict[str, Any]:
+        session = {
+            "sleep_id": record["sleep_id"],
+            "start_at": record["start_at"],
+            "end_at": record["end_at"],
+            "duration_minutes": record["duration_minutes"],
+            "time_asleep_minutes": record["time_asleep_minutes"],
+            "time_awake_minutes": record["time_awake_minutes"],
+            "sleep_score": record.get("sleep_score"),
+            "is_nap": record.get("is_nap", False),
+        }
+
+        if record.get("stages"):
+            import json
+
+            with suppress(json.JSONDecodeError):
+                session["stages"] = json.loads(record["stages"])
+        return session
+
+    @classmethod
+    def _valid_sleep_record(cls, record: dict[str, Any]) -> bool:
+        start_at = cls._sleep_datetime(record.get("start_at"))
+        end_at = cls._sleep_datetime(record.get("end_at"))
+        try:
+            duration = int(record.get("duration_minutes"))
+            asleep = int(record.get("time_asleep_minutes"))
+            awake = int(record.get("time_awake_minutes"))
+        except (TypeError, ValueError):
+            return False
+        try:
+            valid_time_order = end_at is not None and start_at is not None and end_at > start_at
+        except TypeError:
+            valid_time_order = False
+        return (
+            start_at is not None
+            and end_at is not None
+            and valid_time_order
+            and 0 < duration <= MAX_SLEEP_SESSION_MINUTES
+            and 0 <= asleep <= duration
+            and 0 <= awake <= duration
+            and asleep + awake <= duration
+        )
+
+    def get_sleep_summary(self, start_date: str, end_date: str) -> dict[str, Any]:
+        """Return an agent-safe main-sleep view without rewriting cached sessions.
+
+        The cache can contain parallel phone and wearable sessions for the same
+        local wake date.  Raw sessions remain available through
+        :meth:`get_sleep_sessions`; this summary selects one deterministic main
+        session per date and reports coverage instead of treating missing dates
+        as zero-duration sleep.
+        """
+        window_start = date.fromisoformat(start_date)
+        window_end = date.fromisoformat(end_date)
+        if window_start > window_end:
+            raise ValueError("start_date must not be after end_date")
+
+        normalized_start = window_start.isoformat()
+        normalized_end = window_end.isoformat()
+        records = self.db.query_sleep_sessions_by_end_date(
+            self.user_id, normalized_start, normalized_end
+        )
+        valid_main: list[tuple[dict[str, Any], dict[str, Any], datetime, datetime]] = []
+        raw_main_sessions = 0
+        raw_nap_sessions = 0
+        valid_naps = 0
+        invalid_sessions = 0
+        for record in records:
+            is_nap = self._sleep_value_is_true(record.get("is_nap"))
+            if is_nap:
+                raw_nap_sessions += 1
+            else:
+                raw_main_sessions += 1
+            if not self._valid_sleep_record(record):
+                invalid_sessions += 1
+                continue
+            if is_nap:
+                valid_naps += 1
+                continue
+            start_at = self._sleep_datetime(record.get("start_at"))
+            end_at = self._sleep_datetime(record.get("end_at"))
+            assert start_at is not None and end_at is not None
+            valid_main.append((record, self._sleep_session_payload(record), start_at, end_at))
+
+        main_by_day: dict[
+            str,
+            tuple[tuple[int, float, str, str, str], dict[str, Any], dict[str, Any]],
+        ] = {}
+        for record, session, _start_at, end_at in valid_main:
+            day = end_at.date().isoformat()
+            comparable_end = end_at if end_at.tzinfo is not None else end_at.replace(tzinfo=UTC)
+            preference = (
+                int(record["duration_minutes"]),
+                comparable_end.timestamp(),
+                str(record.get("source_record_id") or ""),
+                str(record.get("sleep_id") or ""),
+                str(record.get("id") or ""),
+            )
+            existing = main_by_day.get(day)
+            if existing is None or preference > existing[0]:
+                main_by_day[day] = (preference, record, session)
+
+        selected = [main_by_day[day] for day in sorted(main_by_day)]
+        selected_records = [row[1] for row in selected]
+        main_sessions = [row[2] for row in selected]
+        requested_dates = [
+            (window_start + timedelta(days=offset)).isoformat()
+            for offset in range((window_end - window_start).days + 1)
+        ]
+        missing_dates = [day for day in requested_dates if day not in main_by_day]
+        score_values: list[float] = []
+        invalid_sleep_scores = 0
+        for session in main_sessions:
+            raw_score = session.get("sleep_score")
+            if raw_score is None:
+                continue
+            try:
+                score = float(raw_score)
+            except (TypeError, ValueError):
+                invalid_sleep_scores += 1
+                continue
+            if not 0 <= score <= 100:
+                invalid_sleep_scores += 1
+                continue
+            score_values.append(score)
+
+        def metric(values: list[float | int]) -> dict[str, Any]:
+            return {
+                "mean": round(statistics.fmean(values), 2) if values else None,
+                "days_with_value": len(values),
+            }
+
+        requested_days = len(requested_dates)
+        main_sleep_days = len(main_sessions)
+        provenance_missing = sum(
+            record.get("source_record_id") in (None, "") for record in selected_records
+        )
+        quality_status = (
+            "complete"
+            if main_sleep_days == requested_days
+            and invalid_sessions == 0
+            else "partial"
+        )
+        return {
+            "main_sessions": main_sessions,
+            "metrics": {
+                "duration_minutes": metric(
+                    [int(session["duration_minutes"]) for session in main_sessions]
+                ),
+                "time_asleep_minutes": metric(
+                    [int(session["time_asleep_minutes"]) for session in main_sessions]
+                ),
+                "sleep_score": metric(score_values),
+            },
+            "data_quality": {
+                "status": quality_status,
+                "date_basis": "local_end_date",
+                "raw_session_date_basis": "local_start_date",
+                "selection_method": MAIN_SLEEP_SELECTION_METHOD,
+                "requested_days": requested_days,
+                "main_sleep_days": main_sleep_days,
+                "coverage_ratio": round(main_sleep_days / requested_days, 4),
+                "missing_main_sleep_dates": missing_dates,
+                "raw_main_sessions": raw_main_sessions,
+                "valid_main_sessions": len(valid_main),
+                "selected_main_sessions": main_sleep_days,
+                "suppressed_parallel_main_sessions": len(valid_main) - main_sleep_days,
+                "nap_sessions": valid_naps,
+                "raw_nap_sessions": raw_nap_sessions,
+                "invalid_sessions_excluded": invalid_sessions,
+                "invalid_sleep_scores_excluded": invalid_sleep_scores,
+                "sleep_score_days": len(score_values),
+                "sleep_score_coverage_ratio": (
+                    round(len(score_values) / main_sleep_days, 4) if main_sleep_days else 0.0
+                ),
+                "provenance_missing_count": provenance_missing,
+                "mean_basis": "selected_main_sessions_only",
+                "sleep_score_basis": "upstream_values_only_no_local_estimation",
+                "missing_days_treated_as_zero": False,
+            },
+        }
 
     def get_workouts(
         self,
