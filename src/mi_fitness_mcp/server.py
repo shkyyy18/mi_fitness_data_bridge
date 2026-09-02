@@ -524,6 +524,16 @@ async def _run_sync_data(arguments: dict, sync_id: str | None = None) -> dict:
     }
 
 
+def _mask_account_id(user_id: str | None) -> str | None:
+    """Mask an account identifier before it is sent to the model: keep the
+    first 3 and last 2 characters, replace the middle with asterisks."""
+    if not user_id:
+        return None
+    if len(user_id) <= 5:
+        return "*" * len(user_id)
+    return f"{user_id[:3]}{'*' * (len(user_id) - 5)}{user_id[-2:]}"
+
+
 async def _handle_get_profile() -> dict:
     if not adapter or not adapter.is_connected():
         return {"status": "error", "error": "Not connected to data source"}
@@ -532,7 +542,8 @@ async def _handle_get_profile() -> dict:
         source=config.mode if config else "unknown",
         data={
             "profile": {
-                "user_id": adapter.get_user_id() or "unknown",
+                # 不向模型返回明文 user_id, 只给掩码形式。
+                "account_id_masked": _mask_account_id(adapter.get_user_id()),
                 "timezone": config.timezone if config else "UTC",
                 "devices": [],
             }

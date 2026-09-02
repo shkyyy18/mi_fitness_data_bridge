@@ -657,13 +657,18 @@ class MiFitnessCloudAdapter(DataAdapter):
         for item in records:
             payload = self._parse_value(item)
             measured_at = self._record_datetime(item)
+            # weight 缺失或为 0 的记录没有有效测量值, 直接跳过;
+            # 否则 0 会触发 BodyMeasurement 的 gt=0 校验中断整个生成器。
+            weight_kg = self._optional_float(payload.get("weight"))
+            if weight_kg is None:
+                continue
             yield BodyMeasurement(
                 id=f"mi_fitness_weight_{int(item.get('time', 0))}",
                 provider="mi_fitness",
                 source_type="cloud_session",
                 user_id=self.user_id or "unknown",
                 timestamp=measured_at,
-                weight_kg=float(payload.get("weight", 0)),
+                weight_kg=weight_kg,
                 # bmi=0 出现在"只称重"记录里, 与相邻字段一样按未测量处理,
                 # 否则 0 会触发 BodyMeasurement 的 gt=0 校验中断整个生成器。
                 bmi=self._optional_float(payload.get("bmi")),

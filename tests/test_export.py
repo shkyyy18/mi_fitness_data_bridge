@@ -106,6 +106,25 @@ def test_cli_export_warns_for_empty_datasets_without_changing_csv_bytes(
         assert cli_path.read_bytes() == baseline_path.read_bytes()
 
 
+def test_csv_export_escapes_spreadsheet_formula_cells(tmp_path):
+    database = _sample_database(tmp_path)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE daily_activity SET user_id = '=cmd|/c calc' WHERE id = 'daily-1'"
+        )
+    output = tmp_path / "csv-formula"
+
+    written = export_database(
+        database, output, output_format="csv", dataset="daily_activity"
+    )
+
+    with written[0].open(encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows[0]["user_id"] == "'=cmd|/c calc"
+    # 非公式开头的字符串保持不变。
+    assert rows[0]["id"] == "daily-1"
+
+
 @pytest.mark.parametrize("invalid_date", ["2026/07/14", "2026-7-14", "not-a-date"])
 def test_export_rejects_malformed_dates_before_opening_database(tmp_path, invalid_date):
     with pytest.raises(ValueError, match="start_date must use YYYY-MM-DD format"):

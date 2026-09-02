@@ -47,9 +47,9 @@ mi-fitness-bridge = "mi_fitness_mcp.cli_mi_fitness:main"
 mi-fitness-mcp = "mi_fitness_mcp.cli_mi_fitness:main"
 
 [project.urls]
-Homepage = "https://github.com/shkyyy18/mi-bridge"
-Repository = "https://github.com/shkyyy18/mi-bridge"
-Issues = "https://github.com/shkyyy18/mi-bridge/issues"
+Homepage = "https://github.com/shkyyy18/mi_fitness_data_bridge"
+Repository = "https://github.com/shkyyy18/mi_fitness_data_bridge"
+Issues = "https://github.com/shkyyy18/mi_fitness_data_bridge/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mi_fitness_mcp"]

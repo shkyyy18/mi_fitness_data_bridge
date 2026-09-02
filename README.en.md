@@ -2,7 +2,7 @@
 
 # Mi Bridge (Mi Fitness Data Bridge)
 
-[![Glama score](https://glama.ai/mcp/servers/shkyyy18/mi-bridge/badges/score.svg)](https://glama.ai/mcp/servers/shkyyy18/mi-bridge)
+[![Glama score](https://glama.ai/mcp/servers/shkyyy18/mi_fitness_data_bridge/badges/score.svg)](https://glama.ai/mcp/servers/shkyyy18/mi_fitness_data_bridge)
 
 Local-first data bridge for exporting **your own** Mi Fitness health data to SQLite, JSON, CSV, Python, and MCP-compatible tools.
 
@@ -260,6 +260,7 @@ Downstream projects should install this package rather than vendor or copy the c
 
 - Keep passTokens, local databases, exports, and logs private.
 - Exports contain no passToken but do carry plaintext identifier columns such as `user_id`; they are sensitive personal data too.
+- Health data returned by the `query_*` tools flows through the MCP client into the cloud LLM behind it; run this server only over local stdio with a local client, and never wire it into a remote or hosted agent.
 - Do not run the bridge as a public credential proxy.
 - Do not commit real health data or screenshots containing personal metrics.
 - Use synthetic data in bug reports and documentation.
@@ -285,7 +286,7 @@ This is a young, single-maintainer project, and we would rather show real number
 
 - **Stars:** 1 — currently the only star across the maintainer's entire GitHub account, and it is on this repository. If this bridge is useful to you, your star genuinely stands out.
 - **Traffic (GitHub insights, 14 days ending 2026-07-25):** 36 unique cloners, 2 unique visitors.
-- **External contributions:** none yet — no outside pull requests or issues have arrived. The queue is open and curated; see the [good first issues](https://github.com/shkyyy18/mi-bridge/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
+- **External contributions:** two outside pull requests merged so far (#3 docs, #7 feature), and #10 is under review. The queue is open and curated; see the [good first issues](https://github.com/shkyyy18/mi_fitness_data_bridge/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
 - **Test suite:** 75 tests pass locally (`python -m pytest -q -p no:cacheprovider`), verified 2026-08-17 with Python 3.14 on Windows.
 
 The maintainer's sibling project [AgentCron](https://github.com/shkyyy18/cc-autopilot) received its first three external pull requests through exactly this kind of good-first-issue queue; the [first-contribution case study](https://github.com/shkyyy18/cc-autopilot/blob/main/docs/first-contribution-case-study.md) documents what made those tasks approachable. The same design is applied here: small scope, written acceptance criteria, offline-verifiable with synthetic data, and no real health data ever required.
@@ -296,7 +297,7 @@ The maintainer's sibling project [AgentCron](https://github.com/shkyyy18/cc-auto
 
 ## Support the project
 
-If this bridge finally let you do something with your own Mi Fitness data — a chart, a backup, an MCP-powered query — a star on [GitHub](https://github.com/shkyyy18/mi-bridge) helps the next person who wants their own data back find it. And if you have ten minutes, a good first issue is the fastest way to make the bridge better.
+If this bridge finally let you do something with your own Mi Fitness data — a chart, a backup, an MCP-powered query — a star on [GitHub](https://github.com/shkyyy18/mi_fitness_data_bridge) helps the next person who wants their own data back find it. And if you have ten minutes, a good first issue is the fastest way to make the bridge better.
 
 ## License
 

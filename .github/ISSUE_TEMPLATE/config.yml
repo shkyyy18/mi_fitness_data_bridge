@@ -4,5 +4,5 @@ contact_links:
   # yet, so there is no /security/advisories/new page to link to. Point
   # reporters at SECURITY.md instead, which describes the reporting policy.
   - name: Security report
-    url: https://github.com/shkyyy18/mi-bridge/blob/main/SECURITY.md
+    url: https://github.com/shkyyy18/mi_fitness_data_bridge/blob/main/SECURITY.md
     about: Report credential exposure or security vulnerabilities — see SECURITY.md for the reporting policy before opening a public issue.

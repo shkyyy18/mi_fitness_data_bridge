@@ -2,7 +2,7 @@
 
 # 米桥（Mi Fitness Data Bridge）
 
-[![Glama score](https://glama.ai/mcp/servers/shkyyy18/mi-bridge/badges/score.svg)](https://glama.ai/mcp/servers/shkyyy18/mi-bridge)
+[![Glama score](https://glama.ai/mcp/servers/shkyyy18/mi_fitness_data_bridge/badges/score.svg)](https://glama.ai/mcp/servers/shkyyy18/mi_fitness_data_bridge)
 
 本地优先的数据桥接器，把**你自己的**小米运动健康数据导出到 SQLite、JSON、CSV、Python 以及兼容 MCP 的工具。
 
@@ -260,6 +260,7 @@ from mi_fitness_mcp.adapters.mi_fitness_cloud import MiFitnessCloudAdapter
 
 - 妥善保管 passToken、本地数据库、导出文件和日志，不要外泄。
 - 导出文件不含 passToken，但含明文 `user_id` 等标识列，同样属于敏感个人数据。
+- `query_*` 工具返回的健康数据会经由 MCP 客户端进入其背后的云端大模型；本服务只应通过本机 stdio 接入本机客户端，不要配置给远程或托管 agent。
 - 不要把本桥接器当作公开的凭据代理来运行。
 - 不要提交真实健康数据或包含个人指标的截图。
 - 在 bug 报告和文档中一律使用合成数据。
@@ -285,4 +286,4 @@ python -m ruff check src tests
 
 ## 支持这个项目
 
-如果这个工具帮到了你，在 [GitHub](https://github.com/shkyyy18/mi-bridge) 上帮我点个 star 吧。
+如果这个工具帮到了你，在 [GitHub](https://github.com/shkyyy18/mi_fitness_data_bridge) 上帮我点个 star 吧。

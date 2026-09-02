@@ -32,6 +32,14 @@ def _chmod_private(path: Path, mode: int) -> None:
         os.chmod(path, mode)
 
 
+def _escape_csv_value(value: Any) -> Any:
+    """Prefix spreadsheet-formula-leading string cells with a single quote
+    so opening the CSV in Excel/LibreOffice cannot trigger formula injection."""
+    if isinstance(value, str) and value[:1] in ("=", "+", "-", "@"):
+        return "'" + value
+    return value
+
+
 class ExportResult(list[Path]):
     """Written export paths plus per-dataset row counts."""
 
@@ -160,7 +168,10 @@ def export_database(
         with target.open("w", newline="", encoding="utf-8-sig") as handle:
             writer = csv.DictWriter(handle, fieldnames=columns[name])
             writer.writeheader()
-            writer.writerows(records[name])
+            writer.writerows(
+                {key: _escape_csv_value(value) for key, value in row.items()}
+                for row in records[name]
+            )
         _chmod_private(target, 0o600)
         written.append(target)
     return ExportResult(written, row_counts)
