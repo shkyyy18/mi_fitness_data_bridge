@@ -24,7 +24,7 @@
 $ python -m pytest -q -p no:cacheprovider
 ........................................................................ [ 96%]
 ...                                                                      [100%]
-75 passed in 10.27s
+80 passed in 13.72s
 ```
 
 端到端合成演示（`examples/synthetic_demo.py` 先用合成记录填充本地 SQLite 缓存，再跑真实的 JSON/CSV 导出流水线）：

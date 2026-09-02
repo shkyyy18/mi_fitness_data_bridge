@@ -28,7 +28,7 @@ Test suite:
 $ python -m pytest -q -p no:cacheprovider
 ........................................................................ [ 96%]
 ...                                                                      [100%]
-75 passed in 10.27s
+80 passed in 13.72s
 ```
 
 End-to-end synthetic demo (`examples/synthetic_demo.py` seeds a local SQLite cache with synthetic records, then runs the real JSON/CSV export pipeline):
