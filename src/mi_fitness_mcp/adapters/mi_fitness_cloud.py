@@ -504,16 +504,12 @@ class MiFitnessCloudAdapter(DataAdapter):
             yield
 
         records = await self._fetch_key("steps", start_date, end_date)
-        daily: dict[str, dict[str, Any]] = defaultdict(
-            lambda: {
-                "steps": 0,
-                "distance_m": 0.0,
-                "active_kcal": 0.0,
-                "timezone": "UTC",
-                "collected_at": None,
-            }
-        )
+        # 2026-09-04 issue #11 修复：手机与手环/手表会对同一分钟各自上报步数切片，
+        # 直接求和会双计（实测双设备日多出 +73~+208 步）。App 侧按时间线合并，
+        # 这里按（日期, 分钟时间戳）取最大值去重，overlap 抑制量如实统计上报。
+        per_minute: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
         skipped = 0
+        overlap_suppressed_steps = 0
         for item in records:
             try:
                 payload = self._parse_value(item)
@@ -526,15 +522,50 @@ class MiFitnessCloudAdapter(DataAdapter):
                 logger.debug("Skipping malformed steps record: %s: %s", type(exc).__name__, exc)
                 continue
             date_str = collected_at.strftime("%Y-%m-%d")
-            daily[date_str]["steps"] += steps
-            daily[date_str]["distance_m"] += distance_m
-            daily[date_str]["active_kcal"] += calories
-            daily[date_str]["timezone"] = item.get("zone_name") or daily[date_str]["timezone"]
-            if (
-                daily[date_str]["collected_at"] is None
-                or collected_at > daily[date_str]["collected_at"]
-            ):
-                daily[date_str]["collected_at"] = collected_at
+            minute_key = collected_at.isoformat()
+            existing = per_minute[date_str].get(minute_key)
+            if existing is None:
+                per_minute[date_str][minute_key] = {
+                    "steps": steps,
+                    "distance_m": distance_m,
+                    "calories": calories,
+                    "zone_name": item.get("zone_name"),
+                    "collected_at": collected_at,
+                }
+            else:
+                # 同一时间戳的并行来源：取大者，被压制一方的步数计入抑制量
+                overlap_suppressed_steps += min(existing["steps"], steps)
+                if steps > existing["steps"]:
+                    existing.update(
+                        steps=steps,
+                        distance_m=max(existing["distance_m"], distance_m),
+                        calories=max(existing["calories"], calories),
+                    )
+        daily: dict[str, dict[str, Any]] = defaultdict(
+            lambda: {
+                "steps": 0,
+                "distance_m": 0.0,
+                "active_kcal": 0.0,
+                "timezone": "UTC",
+                "collected_at": None,
+            }
+        )
+        for date_str, minutes in per_minute.items():
+            for minute in minutes.values():
+                daily[date_str]["steps"] += minute["steps"]
+                daily[date_str]["distance_m"] += minute["distance_m"]
+                daily[date_str]["active_kcal"] += minute["calories"]
+                daily[date_str]["timezone"] = minute["zone_name"] or daily[date_str]["timezone"]
+                if (
+                    daily[date_str]["collected_at"] is None
+                    or minute["collected_at"] > daily[date_str]["collected_at"]
+                ):
+                    daily[date_str]["collected_at"] = minute["collected_at"]
+        if overlap_suppressed_steps:
+            logger.info(
+                "daily_activity: suppressed %d duplicate steps from parallel sources",
+                overlap_suppressed_steps,
+            )
 
         calorie_records = await self._fetch_key("calories", start_date, end_date)
         calorie_totals: dict[str, float] = defaultdict(float)
