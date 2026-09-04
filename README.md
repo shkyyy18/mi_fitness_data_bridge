@@ -227,6 +227,8 @@ mi-fitness-mcp serve
 
 可用的工具包括连接状态、同步、覆盖范围、每日摘要、身体测量、睡眠、运动、心率、血氧（SpO2）和压力查询，以及面向 agent 的 `workout_series` 运动时序工具——按 `max_points` 硬上限自动降采样（固定时间桶均值，SQLite 内聚合），并在响应中如实标注 `downsampled`、`source_points`、`returned_points`、`method`，同时给出全精度统计（avg/min/max/分位数）与心率区间时间。`query_workouts`、`get_daily_summary` 等列表/汇总工具附带 `data_quality`（覆盖天数、缺失指标、最后同步时间）。
 
+`query_sleep` 保留按入睡日期查询的原始缓存会话，并额外返回按本地醒来日期选择的主睡眠汇总和 `data_quality`。同一醒来日有手机、手环等并行记录时，汇总视图只选择最长的有效非午睡会话；`include_naps` 只过滤原始会话列表，质量信息仍会报告该窗口的午睡数量。缺失日期会明确列出，绝不按 0 小时睡眠参与均值；睡眠评分只使用上游实际提供的值，不在本机推算。
+
 客户端接入示例（Claude Code / Codex 等 MCP 客户端的配置 JSON）：
 
 ```json
