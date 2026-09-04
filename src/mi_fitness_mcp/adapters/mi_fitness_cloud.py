@@ -15,6 +15,7 @@ from urllib.parse import urlencode, urlparse
 import httpx
 
 from mi_fitness_mcp.adapters.base import DataAdapter
+from mi_fitness_mcp.auth import save_mi_fitness_token
 from mi_fitness_mcp.models import (
     AbnormalHeartBeatEvent,
     BodyMeasurement,
@@ -29,6 +30,9 @@ from mi_fitness_mcp.models import (
 
 LOGIN_PREFIX = b"&&&START&&&"
 KNOWN_REGIONS = ["ru", "cn", "de", "i2", "sg", "us"]
+# 2000-01-01T00:00:00Z。time 字段缺失时旧代码 int(item.get("time", 0)) 会把
+# 记录 id 塌缩成 ..._0、timestamp 塌缩到 1970；早于该时间的一律视为损坏记录。
+MIN_VALID_TIMESTAMP = 946684800
 AUTH_ERROR_MARKERS = (
     "authentication failed",
     "invalid credential",
@@ -208,9 +212,19 @@ class MiFitnessCloudAdapter(DataAdapter):
         )
         response.raise_for_status()
         payload = _read_login_payload(response.text)
-        self.pass_token = payload["passToken"]
+        new_pass_token = payload["passToken"]
+        rotated = new_pass_token != pass_token
+        self.pass_token = new_pass_token
         self.user_id = str(payload["userId"])
         self._ssecurity = base64.b64decode(payload["ssecurity"])
+
+        if rotated:
+            # 每次登录都会轮换 passToken，旧 token 很快失效；必须写回 keyring，
+            # 否则下次启动仍拿旧 token 登录会直接失败。写失败只告警，不中断同步。
+            try:
+                save_mi_fitness_token(self.user_id, self.pass_token)
+            except Exception as exc:
+                logger.warning("Failed to persist rotated passToken to keyring: %s", exc)
 
         location = payload["location"]
         if not _is_allowed_login_redirect(location):
@@ -370,10 +384,39 @@ class MiFitnessCloudAdapter(DataAdapter):
         ]
 
     def _record_datetime(self, item: dict) -> datetime:
-        timestamp = int(item.get("time", 0))
+        raw = item.get("time")
+        try:
+            timestamp = int(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"record has no valid time field: {raw!r}") from exc
+        if timestamp < MIN_VALID_TIMESTAMP:
+            raise ValueError(f"record time predates year 2000: {timestamp}")
         zone_offset = int(item.get("zone_offset", 0) or 0)
         tz = timezone(timedelta(seconds=zone_offset))
         return datetime.fromtimestamp(timestamp, tz=tz)
+
+    def _try_record_datetime(self, item: dict) -> datetime | None:
+        """Best-effort variant of _record_datetime for optional collected_at."""
+        try:
+            return self._record_datetime(item)
+        except (ValueError, OverflowError, OSError):
+            return None
+
+    @staticmethod
+    def _check_timestamp(value: Any) -> int:
+        """Parse a payload timestamp and reject missing/pre-2000 values."""
+        timestamp = int(value)
+        if timestamp < MIN_VALID_TIMESTAMP:
+            raise ValueError(f"timestamp predates year 2000: {timestamp}")
+        return timestamp
+
+    def _log_skipped(self, kind: str, count: int) -> None:
+        if count:
+            logger.warning(
+                "%s: skipped %d malformed record(s) (missing/invalid time or payload)",
+                kind,
+                count,
+            )
 
     def _parse_value(self, item: dict) -> dict[str, Any]:
         raw = item.get("value", "{}")
@@ -470,13 +513,22 @@ class MiFitnessCloudAdapter(DataAdapter):
                 "collected_at": None,
             }
         )
+        skipped = 0
         for item in records:
-            payload = self._parse_value(item)
-            collected_at = self._record_datetime(item)
+            try:
+                payload = self._parse_value(item)
+                collected_at = self._record_datetime(item)
+                steps = int(payload.get("steps", 0))
+                distance_m = float(payload.get("distance", 0))
+                calories = float(payload.get("calories", 0))
+            except Exception as exc:
+                skipped += 1
+                logger.debug("Skipping malformed steps record: %s: %s", type(exc).__name__, exc)
+                continue
             date_str = collected_at.strftime("%Y-%m-%d")
-            daily[date_str]["steps"] += int(payload.get("steps", 0))
-            daily[date_str]["distance_m"] += float(payload.get("distance", 0))
-            daily[date_str]["active_kcal"] += float(payload.get("calories", 0))
+            daily[date_str]["steps"] += steps
+            daily[date_str]["distance_m"] += distance_m
+            daily[date_str]["active_kcal"] += calories
             daily[date_str]["timezone"] = item.get("zone_name") or daily[date_str]["timezone"]
             if (
                 daily[date_str]["collected_at"] is None
@@ -487,10 +539,16 @@ class MiFitnessCloudAdapter(DataAdapter):
         calorie_records = await self._fetch_key("calories", start_date, end_date)
         calorie_totals: dict[str, float] = defaultdict(float)
         for item in calorie_records:
-            payload = self._parse_value(item)
-            collected_at = self._record_datetime(item)
+            try:
+                payload = self._parse_value(item)
+                collected_at = self._record_datetime(item)
+                calories = float(payload.get("calories", 0))
+            except Exception as exc:
+                skipped += 1
+                logger.debug("Skipping malformed calories record: %s: %s", type(exc).__name__, exc)
+                continue
             date_str = collected_at.strftime("%Y-%m-%d")
-            calorie_totals[date_str] += float(payload.get("calories", 0))
+            calorie_totals[date_str] += calories
             daily[date_str]["timezone"] = item.get("zone_name") or daily[date_str]["timezone"]
             if (
                 daily[date_str]["collected_at"] is None
@@ -502,18 +560,27 @@ class MiFitnessCloudAdapter(DataAdapter):
             daily[date_str]["active_kcal"] = total
 
         for date_str, values in sorted(daily.items()):
-            yield DailyActivity(
-                id=f"mi_fitness_activity_{date_str}",
-                provider="mi_fitness",
-                source_type="cloud_session",
-                user_id=self.user_id or "unknown",
-                timezone=str(values["timezone"]),
-                collected_at=values["collected_at"],
-                date=date_str,
-                steps=int(values["steps"]),
-                distance_m=float(values["distance_m"]),
-                active_kcal=float(values["active_kcal"]),
-            )
+            try:
+                activity = DailyActivity(
+                    id=f"mi_fitness_activity_{date_str}",
+                    provider="mi_fitness",
+                    source_type="cloud_session",
+                    user_id=self.user_id or "unknown",
+                    timezone=str(values["timezone"]),
+                    collected_at=values["collected_at"],
+                    date=date_str,
+                    steps=int(values["steps"]),
+                    distance_m=float(values["distance_m"]),
+                    active_kcal=float(values["active_kcal"]),
+                )
+            except Exception as exc:
+                skipped += 1
+                logger.debug(
+                    "Skipping malformed daily_activity row: %s: %s", type(exc).__name__, exc
+                )
+                continue
+            yield activity
+        self._log_skipped("daily_activity", skipped)
 
     async def iter_sleep_sessions(
         self,
@@ -525,67 +592,81 @@ class MiFitnessCloudAdapter(DataAdapter):
             yield
 
         records = await self._fetch_key("sleep", start_date, end_date)
+        skipped = 0
         for item in records:
-            payload = self._parse_value(item)
-            zone_offset = int(item.get("zone_offset", 0) or 0)
-            sleep_start = (
-                payload.get("bedtime")
-                or payload.get("device_bedtime")
-                or payload.get("bed_timestamp")
-            )
-            sleep_end = (
-                payload.get("wake_up_time")
-                or payload.get("device_wake_up_time")
-                or payload.get("out_bed_timestamp")
-                or item.get("time")
-            )
-            if not sleep_start or not sleep_end:
-                continue
-
-            start_at = self._timestamp_to_datetime(sleep_start, zone_offset)
-            end_at = self._timestamp_to_datetime(sleep_end, zone_offset)
-            duration_minutes = int(
-                payload.get("duration") or max(0, (int(sleep_end) - int(sleep_start)) // 60)
-            )
-            awake_minutes = int(
-                payload.get("awake_duration") or payload.get("sleep_awake_duration") or 0
-            )
-            asleep_minutes = max(0, duration_minutes - awake_minutes)
-
-            stages: list[SleepStage] = []
-            for segment in payload.get("items", []) or []:
-                try:
-                    seg_start = int(segment.get("start_time", 0))
-                    seg_end = int(segment.get("end_time", 0))
-                    minutes = max(0, (seg_end - seg_start) // 60)
-                    if minutes:
-                        stages.append(
-                            SleepStage(
-                                stage=self._sleep_stage_name(segment.get("state")), minutes=minutes
-                            )
-                        )
-                except Exception:
+            try:
+                payload = self._parse_value(item)
+                zone_offset = int(item.get("zone_offset", 0) or 0)
+                sleep_start = (
+                    payload.get("bedtime")
+                    or payload.get("device_bedtime")
+                    or payload.get("bed_timestamp")
+                )
+                sleep_end = (
+                    payload.get("wake_up_time")
+                    or payload.get("device_wake_up_time")
+                    or payload.get("out_bed_timestamp")
+                    or item.get("time")
+                )
+                if not sleep_start or not sleep_end:
                     continue
+                sleep_start = self._check_timestamp(sleep_start)
+                sleep_end = self._check_timestamp(sleep_end)
 
-            sleep_id = f"{item.get('sid', self.user_id)}_{item.get('time', int(sleep_end))}"
-            yield SleepSession(
-                id=f"mi_fitness_sleep_{sleep_id}",
-                provider="mi_fitness",
-                source_type="cloud_session",
-                source_record_id=str(item.get("time", "")) or None,
-                user_id=self.user_id or "unknown",
-                timezone=item.get("zone_name") or "UTC",
-                collected_at=self._record_datetime(item),
-                sleep_id=sleep_id,
-                start_at=start_at,
-                end_at=end_at,
-                duration_minutes=duration_minutes,
-                time_asleep_minutes=asleep_minutes,
-                time_awake_minutes=awake_minutes,
-                sleep_score=self._optional_int(payload.get("score") or payload.get("sleep_score")),
-                is_nap=bool(payload.get("is_nap", False)),
-                stages=stages,
-            )
+                start_at = self._timestamp_to_datetime(sleep_start, zone_offset)
+                end_at = self._timestamp_to_datetime(sleep_end, zone_offset)
+                duration_minutes = int(
+                    payload.get("duration") or max(0, (sleep_end - sleep_start) // 60)
+                )
+                awake_minutes = int(
+                    payload.get("awake_duration") or payload.get("sleep_awake_duration") or 0
+                )
+                asleep_minutes = max(0, duration_minutes - awake_minutes)
+
+                stages: list[SleepStage] = []
+                for segment in payload.get("items", []) or []:
+                    try:
+                        seg_start = int(segment.get("start_time", 0))
+                        seg_end = int(segment.get("end_time", 0))
+                        minutes = max(0, (seg_end - seg_start) // 60)
+                        if minutes:
+                            stages.append(
+                                SleepStage(
+                                    stage=self._sleep_stage_name(segment.get("state")),
+                                    minutes=minutes,
+                                )
+                            )
+                    except Exception:
+                        continue
+
+                sleep_id = f"{item.get('sid', self.user_id)}_{item.get('time') or sleep_end}"
+                session = SleepSession(
+                    id=f"mi_fitness_sleep_{sleep_id}",
+                    provider="mi_fitness",
+                    source_type="cloud_session",
+                    source_record_id=str(item.get("time", "")) or None,
+                    user_id=self.user_id or "unknown",
+                    timezone=item.get("zone_name") or "UTC",
+                    # item 的 time 字段可能缺失；此时 collected_at 退化为睡眠结束时间。
+                    collected_at=self._try_record_datetime(item) or end_at,
+                    sleep_id=sleep_id,
+                    start_at=start_at,
+                    end_at=end_at,
+                    duration_minutes=duration_minutes,
+                    time_asleep_minutes=asleep_minutes,
+                    time_awake_minutes=awake_minutes,
+                    sleep_score=self._optional_int(
+                        payload.get("score") or payload.get("sleep_score")
+                    ),
+                    is_nap=bool(payload.get("is_nap", False)),
+                    stages=stages,
+                )
+            except Exception as exc:
+                skipped += 1
+                logger.debug("Skipping malformed sleep record: %s: %s", type(exc).__name__, exc)
+                continue
+            yield session
+        self._log_skipped("sleep", skipped)
 
     async def iter_workouts(
         self,
@@ -597,52 +678,68 @@ class MiFitnessCloudAdapter(DataAdapter):
             yield
 
         records = await self._fetch_sport_records_by_time(start_date, end_date)
+        skipped = 0
         for item in records:
-            payload = self._parse_value(item)
-            zone_offset = int(item.get("zone_offset", 0) or 0)
-            start_ts = payload.get("start_time") or item.get("time")
-            end_ts = payload.get("end_time")
-            duration_seconds = int(payload.get("duration", 0) or 0)
-            if not end_ts and start_ts:
-                end_ts = int(start_ts) + duration_seconds
-            if not start_ts or not end_ts:
+            try:
+                payload = self._parse_value(item)
+                zone_offset = int(item.get("zone_offset", 0) or 0)
+                start_ts = payload.get("start_time") or item.get("time")
+                end_ts = payload.get("end_time")
+                duration_seconds = int(payload.get("duration", 0) or 0)
+                if not end_ts and start_ts:
+                    end_ts = int(start_ts) + duration_seconds
+                if not start_ts or not end_ts:
+                    continue
+                start_ts = self._check_timestamp(start_ts)
+                end_ts = self._check_timestamp(end_ts)
+
+                start_at = self._timestamp_to_datetime(start_ts, zone_offset)
+                end_at = self._timestamp_to_datetime(end_ts, zone_offset)
+                duration_minutes = max(0, int(duration_seconds // 60))
+                if duration_minutes == 0:
+                    duration_minutes = max(0, (end_ts - start_ts) // 60)
+
+                workout_id = (
+                    f"{item.get('sid', self.user_id)}_{item.get('key', 'workout')}"
+                    f"_{item.get('time') or start_ts}"
+                )
+                workout = Workout(
+                    id=f"mi_fitness_workout_{workout_id}",
+                    provider="mi_fitness",
+                    source_type="cloud_session",
+                    source_record_id=str(item.get("time", "")) or None,
+                    user_id=self.user_id or "unknown",
+                    timezone=item.get("zone_name") or "UTC",
+                    # item 的 time 字段可能缺失；此时 collected_at 退化为开始时间。
+                    collected_at=self._try_record_datetime(item) or start_at,
+                    workout_id=workout_id,
+                    activity_type=str(
+                        item.get("category")
+                        or item.get("key")
+                        or payload.get("sport_type")
+                        or "workout"
+                    ),
+                    start_at=start_at,
+                    end_at=end_at,
+                    duration_minutes=duration_minutes,
+                    distance_m=self._optional_float(payload.get("distance")),
+                    calories_kcal=self._optional_float(
+                        payload.get("calories") or payload.get("total_cal")
+                    ),
+                    avg_heart_rate_bpm=self._optional_int(payload.get("avg_hrm")),
+                    max_heart_rate_bpm=self._optional_int(payload.get("max_hrm")),
+                    avg_pace_sec_per_km=self._optional_float(payload.get("avg_pace")),
+                    max_pace_sec_per_km=self._optional_float(payload.get("max_pace")),
+                    total_steps=self._optional_int(
+                        payload.get("steps") or payload.get("total_steps")
+                    ),
+                )
+            except Exception as exc:
+                skipped += 1
+                logger.debug("Skipping malformed workout record: %s: %s", type(exc).__name__, exc)
                 continue
-
-            start_at = self._timestamp_to_datetime(start_ts, zone_offset)
-            end_at = self._timestamp_to_datetime(end_ts, zone_offset)
-            duration_minutes = max(0, int(duration_seconds // 60))
-            if duration_minutes == 0:
-                duration_minutes = max(0, (int(end_ts) - int(start_ts)) // 60)
-
-            workout_id = f"{item.get('sid', self.user_id)}_{item.get('key', 'workout')}_{item.get('time', start_ts)}"
-            yield Workout(
-                id=f"mi_fitness_workout_{workout_id}",
-                provider="mi_fitness",
-                source_type="cloud_session",
-                source_record_id=str(item.get("time", "")) or None,
-                user_id=self.user_id or "unknown",
-                timezone=item.get("zone_name") or "UTC",
-                collected_at=self._record_datetime(item),
-                workout_id=workout_id,
-                activity_type=str(
-                    item.get("category")
-                    or item.get("key")
-                    or payload.get("sport_type")
-                    or "workout"
-                ),
-                start_at=start_at,
-                end_at=end_at,
-                duration_minutes=duration_minutes,
-                distance_m=self._optional_float(payload.get("distance")),
-                calories_kcal=self._optional_float(
-                    payload.get("calories") or payload.get("total_cal")
-                ),
-                avg_heart_rate_bpm=self._optional_int(payload.get("avg_hrm")),
-                max_heart_rate_bpm=self._optional_int(payload.get("max_hrm")),
-                avg_pace_sec_per_km=self._optional_float(payload.get("avg_pace")),
-                max_pace_sec_per_km=self._optional_float(payload.get("max_pace")),
-                total_steps=self._optional_int(payload.get("steps") or payload.get("total_steps")),
-            )
+            yield workout
+        self._log_skipped("workouts", skipped)
 
     async def iter_body_measurements(
         self,
@@ -654,32 +751,40 @@ class MiFitnessCloudAdapter(DataAdapter):
             yield
 
         records = await self._fetch_key("weight", start_date, end_date)
+        skipped = 0
         for item in records:
-            payload = self._parse_value(item)
-            measured_at = self._record_datetime(item)
-            # weight 缺失或为 0 的记录没有有效测量值, 直接跳过;
-            # 否则 0 会触发 BodyMeasurement 的 gt=0 校验中断整个生成器。
-            weight_kg = self._optional_float(payload.get("weight"))
-            if weight_kg is None:
-                continue
-            yield BodyMeasurement(
-                id=f"mi_fitness_weight_{int(item.get('time', 0))}",
-                provider="mi_fitness",
-                source_type="cloud_session",
-                user_id=self.user_id or "unknown",
-                timestamp=measured_at,
-                weight_kg=weight_kg,
-                # bmi=0 出现在"只称重"记录里, 与相邻字段一样按未测量处理,
+            try:
+                payload = self._parse_value(item)
+                measured_at = self._record_datetime(item)
+                # weight 缺失或为 0 的记录没有有效测量值, 直接跳过;
                 # 否则 0 会触发 BodyMeasurement 的 gt=0 校验中断整个生成器。
-                bmi=self._optional_float(payload.get("bmi")),
-                body_fat_pct=self._optional_float(payload.get("body_fat_rate")),
-                muscle_mass_kg=self._optional_float(payload.get("muscle_rate")),
-                water_pct=self._optional_float(payload.get("moisture_rate")),
-                bone_mass_kg=self._optional_float(payload.get("bone_mass")),
-                visceral_fat_score=self._optional_int(payload.get("visceral_fat")),
-                basal_metabolism_kcal=self._optional_int(payload.get("basal_metabolism")),
-                metabolic_age=self._optional_int(payload.get("body_age")),
-            )
+                weight_kg = self._optional_float(payload.get("weight"))
+                if weight_kg is None:
+                    continue
+                measurement = BodyMeasurement(
+                    id=f"mi_fitness_weight_{int(item.get('time', 0))}",
+                    provider="mi_fitness",
+                    source_type="cloud_session",
+                    user_id=self.user_id or "unknown",
+                    timestamp=measured_at,
+                    weight_kg=weight_kg,
+                    # bmi=0 出现在"只称重"记录里, 与相邻字段一样按未测量处理,
+                    # 否则 0 会触发 BodyMeasurement 的 gt=0 校验中断整个生成器。
+                    bmi=self._optional_float(payload.get("bmi")),
+                    body_fat_pct=self._optional_float(payload.get("body_fat_rate")),
+                    muscle_mass_kg=self._optional_float(payload.get("muscle_rate")),
+                    water_pct=self._optional_float(payload.get("moisture_rate")),
+                    bone_mass_kg=self._optional_float(payload.get("bone_mass")),
+                    visceral_fat_score=self._optional_int(payload.get("visceral_fat")),
+                    basal_metabolism_kcal=self._optional_int(payload.get("basal_metabolism")),
+                    metabolic_age=self._optional_int(payload.get("body_age")),
+                )
+            except Exception as exc:
+                skipped += 1
+                logger.debug("Skipping malformed weight record: %s: %s", type(exc).__name__, exc)
+                continue
+            yield measurement
+        self._log_skipped("body_measurements", skipped)
 
     async def iter_heart_rate(
         self,
@@ -691,40 +796,65 @@ class MiFitnessCloudAdapter(DataAdapter):
             yield
 
         records = await self._fetch_key("heart_rate", start_date, end_date)
+        skipped = 0
         for item in records:
-            payload = self._parse_value(item)
-            sample_type = "passive" if int(payload.get("type", 0)) == 0 else "active"
-            yield HeartRateSample(
-                id=f"mi_fitness_hr_{int(item.get('time', 0))}",
-                provider="mi_fitness",
-                source_type="cloud_session",
-                source_record_id=str(item.get("time", "")) or None,
-                user_id=self.user_id or "unknown",
-                timezone=item.get("zone_name") or "UTC",
-                collected_at=self._record_datetime(item),
-                timestamp=self._record_datetime(item),
-                bpm=int(payload.get("bpm", 0)),
-                sample_type=sample_type,
-            )
+            try:
+                payload = self._parse_value(item)
+                timestamp = self._record_datetime(item)
+                sample_type = "passive" if int(payload.get("type", 0)) == 0 else "active"
+                sample = HeartRateSample(
+                    id=f"mi_fitness_hr_{int(item.get('time', 0))}",
+                    provider="mi_fitness",
+                    source_type="cloud_session",
+                    source_record_id=str(item.get("time", "")) or None,
+                    user_id=self.user_id or "unknown",
+                    timezone=item.get("zone_name") or "UTC",
+                    collected_at=timestamp,
+                    timestamp=timestamp,
+                    bpm=int(payload.get("bpm", 0)),
+                    sample_type=sample_type,
+                )
+            except Exception as exc:
+                skipped += 1
+                logger.debug(
+                    "Skipping malformed heart_rate record: %s: %s", type(exc).__name__, exc
+                )
+                continue
+            yield sample
 
         resting_records = await self._fetch_key("resting_heart_rate", start_date, end_date)
         for item in resting_records:
-            payload = self._parse_value(item)
-            timestamp = payload.get("date_time") or item.get("time")
-            yield HeartRateSample(
-                id=f"mi_fitness_resting_hr_{int(timestamp or item.get('time', 0))}",
-                provider="mi_fitness",
-                source_type="cloud_session",
-                source_record_id=str(item.get("time", "")) or None,
-                user_id=self.user_id or "unknown",
-                timezone=item.get("zone_name") or "UTC",
-                collected_at=self._record_datetime(item),
-                timestamp=self._timestamp_to_datetime(
-                    timestamp or item.get("time"), int(item.get("zone_offset", 0) or 0)
-                ),
-                bpm=int(payload.get("bpm", 0)),
-                sample_type="resting",
-            )
+            try:
+                payload = self._parse_value(item)
+                timestamp_value = payload.get("date_time") or item.get("time")
+                if timestamp_value is None:
+                    raise ValueError("resting heart rate record has no timestamp")
+                timestamp_value = self._check_timestamp(timestamp_value)
+                timestamp = self._timestamp_to_datetime(
+                    timestamp_value, int(item.get("zone_offset", 0) or 0)
+                )
+                sample = HeartRateSample(
+                    id=f"mi_fitness_resting_hr_{timestamp_value}",
+                    provider="mi_fitness",
+                    source_type="cloud_session",
+                    source_record_id=str(item.get("time", "")) or None,
+                    user_id=self.user_id or "unknown",
+                    timezone=item.get("zone_name") or "UTC",
+                    collected_at=self._try_record_datetime(item) or timestamp,
+                    timestamp=timestamp,
+                    bpm=int(payload.get("bpm", 0)),
+                    sample_type="resting",
+                )
+            except Exception as exc:
+                skipped += 1
+                logger.debug(
+                    "Skipping malformed resting_heart_rate record: %s: %s",
+                    type(exc).__name__,
+                    exc,
+                )
+                continue
+            yield sample
+        self._log_skipped("heart_rate", skipped)
 
     def _stress_level(self, score: int) -> str:
         if score < 30:
@@ -743,25 +873,35 @@ class MiFitnessCloudAdapter(DataAdapter):
             yield
 
         records = await self._fetch_key("spo2", start_date, end_date)
+        skipped = 0
         for item in records:
-            payload = self._parse_value(item)
-            timestamp = payload.get("time") or item.get("time")
-            spo2 = payload.get("spo2") or payload.get("value")
-            if timestamp is None or spo2 is None:
+            try:
+                payload = self._parse_value(item)
+                timestamp_value = payload.get("time") or item.get("time")
+                spo2 = payload.get("spo2") or payload.get("value")
+                if timestamp_value is None or spo2 is None:
+                    continue
+                timestamp_value = self._check_timestamp(timestamp_value)
+                timestamp = self._timestamp_to_datetime(
+                    timestamp_value, int(item.get("zone_offset", 0) or 0)
+                )
+                sample = SpO2Sample(
+                    id=f"mi_fitness_spo2_{timestamp_value}",
+                    provider="mi_fitness",
+                    source_type="cloud_session",
+                    source_record_id=str(item.get("time", "")) or None,
+                    user_id=self.user_id or "unknown",
+                    timezone=item.get("zone_name") or "UTC",
+                    collected_at=self._try_record_datetime(item) or timestamp,
+                    timestamp=timestamp,
+                    spo2_pct=int(float(spo2)),
+                )
+            except Exception as exc:
+                skipped += 1
+                logger.debug("Skipping malformed spo2 record: %s: %s", type(exc).__name__, exc)
                 continue
-            yield SpO2Sample(
-                id=f"mi_fitness_spo2_{int(timestamp)}",
-                provider="mi_fitness",
-                source_type="cloud_session",
-                source_record_id=str(item.get("time", "")) or None,
-                user_id=self.user_id or "unknown",
-                timezone=item.get("zone_name") or "UTC",
-                collected_at=self._record_datetime(item),
-                timestamp=self._timestamp_to_datetime(
-                    timestamp, int(item.get("zone_offset", 0) or 0)
-                ),
-                spo2_pct=int(float(spo2)),
-            )
+            yield sample
+        self._log_skipped("spo2", skipped)
 
     async def iter_stress(
         self,
@@ -773,27 +913,37 @@ class MiFitnessCloudAdapter(DataAdapter):
             yield
 
         records = await self._fetch_key("stress", start_date, end_date)
+        skipped = 0
         for item in records:
-            payload = self._parse_value(item)
-            timestamp = payload.get("time") or item.get("time")
-            stress = payload.get("stress") or payload.get("score") or payload.get("value")
-            if timestamp is None or stress is None:
+            try:
+                payload = self._parse_value(item)
+                timestamp_value = payload.get("time") or item.get("time")
+                stress = payload.get("stress") or payload.get("score") or payload.get("value")
+                if timestamp_value is None or stress is None:
+                    continue
+                timestamp_value = self._check_timestamp(timestamp_value)
+                timestamp = self._timestamp_to_datetime(
+                    timestamp_value, int(item.get("zone_offset", 0) or 0)
+                )
+                score = int(float(stress))
+                sample = StressSample(
+                    id=f"mi_fitness_stress_{timestamp_value}",
+                    provider="mi_fitness",
+                    source_type="cloud_session",
+                    source_record_id=str(item.get("time", "")) or None,
+                    user_id=self.user_id or "unknown",
+                    timezone=item.get("zone_name") or "UTC",
+                    collected_at=self._try_record_datetime(item) or timestamp,
+                    timestamp=timestamp,
+                    stress_score=score,
+                    level=self._stress_level(score),
+                )
+            except Exception as exc:
+                skipped += 1
+                logger.debug("Skipping malformed stress record: %s: %s", type(exc).__name__, exc)
                 continue
-            score = int(float(stress))
-            yield StressSample(
-                id=f"mi_fitness_stress_{int(timestamp)}",
-                provider="mi_fitness",
-                source_type="cloud_session",
-                source_record_id=str(item.get("time", "")) or None,
-                user_id=self.user_id or "unknown",
-                timezone=item.get("zone_name") or "UTC",
-                collected_at=self._record_datetime(item),
-                timestamp=self._timestamp_to_datetime(
-                    timestamp, int(item.get("zone_offset", 0) or 0)
-                ),
-                stress_score=score,
-                level=self._stress_level(score),
-            )
+            yield sample
+        self._log_skipped("stress", skipped)
 
     async def iter_abnormal_heart_beat(
         self,
@@ -805,30 +955,44 @@ class MiFitnessCloudAdapter(DataAdapter):
             yield
 
         records = await self._fetch_key("abnormal_heart_beat", start_date, end_date)
+        skipped = 0
         for item in records:
-            payload = self._parse_value(item)
-            zone_offset = int(item.get("zone_offset", 0) or 0)
-            start_ts = payload.get("start_time") or item.get("time")
-            end_ts = payload.get("end_time") or start_ts
-            if start_ts is None:
+            try:
+                payload = self._parse_value(item)
+                zone_offset = int(item.get("zone_offset", 0) or 0)
+                start_ts = payload.get("start_time") or item.get("time")
+                end_ts = payload.get("end_time") or start_ts
+                if start_ts is None:
+                    continue
+                start_ts = self._check_timestamp(start_ts)
+                end_ts = self._check_timestamp(end_ts)
+                start_at = self._timestamp_to_datetime(start_ts, zone_offset)
+                end_at = self._timestamp_to_datetime(end_ts, zone_offset)
+                duration_seconds = max(0, end_ts - start_ts)
+                event_id = f"{item.get('sid', self.user_id)}_{start_ts}"
+                event = AbnormalHeartBeatEvent(
+                    id=f"mi_fitness_abnormal_hr_{event_id}",
+                    provider="mi_fitness",
+                    source_type="cloud_session",
+                    source_record_id=str(item.get("time", "")) or None,
+                    user_id=self.user_id or "unknown",
+                    timezone=item.get("zone_name") or "UTC",
+                    collected_at=self._try_record_datetime(item) or start_at,
+                    event_id=event_id,
+                    start_at=start_at,
+                    end_at=end_at,
+                    duration_seconds=duration_seconds,
+                )
+            except Exception as exc:
+                skipped += 1
+                logger.debug(
+                    "Skipping malformed abnormal_heart_beat record: %s: %s",
+                    type(exc).__name__,
+                    exc,
+                )
                 continue
-            start_at = self._timestamp_to_datetime(start_ts, zone_offset)
-            end_at = self._timestamp_to_datetime(end_ts, zone_offset)
-            duration_seconds = max(0, int(end_ts) - int(start_ts))
-            event_id = f"{item.get('sid', self.user_id)}_{int(start_ts)}"
-            yield AbnormalHeartBeatEvent(
-                id=f"mi_fitness_abnormal_hr_{event_id}",
-                provider="mi_fitness",
-                source_type="cloud_session",
-                source_record_id=str(item.get("time", "")) or None,
-                user_id=self.user_id or "unknown",
-                timezone=item.get("zone_name") or "UTC",
-                collected_at=self._record_datetime(item),
-                event_id=event_id,
-                start_at=start_at,
-                end_at=end_at,
-                duration_seconds=duration_seconds,
-            )
+            yield event
+        self._log_skipped("abnormal_heart_beat", skipped)
 
     async def close(self) -> None:
         await self._close_client()

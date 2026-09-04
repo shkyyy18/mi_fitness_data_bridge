@@ -32,10 +32,27 @@ def _chmod_private(path: Path, mode: int) -> None:
         os.chmod(path, mode)
 
 
+# Excel/LibreOffice 会把以 = + - @（以及前导 Tab/CR 变体）开头的单元格解释为公式。
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
 def _escape_csv_value(value: Any) -> Any:
     """Prefix spreadsheet-formula-leading string cells with a single quote
-    so opening the CSV in Excel/LibreOffice cannot trigger formula injection."""
-    if isinstance(value, str) and value[:1] in ("=", "+", "-", "@"):
+    so opening the CSV in Excel/LibreOffice cannot trigger formula injection.
+
+    注意：这个单引号前缀是**不可逆**的——回读 CSV 时它会留在值里。
+    因此能解析为数字（含负数/小数）的字符串不转义，否则 "-3.5" 这类正常
+    数值回读后会变成文本，造成数据失真。
+    """
+    if not isinstance(value, str):
+        return value
+    # 电子表格会忽略前导空白，先剥掉（含空格/Tab/CR/LF）再判定首字符。
+    stripped = value.lstrip()
+    if not stripped or stripped[0] not in _CSV_FORMULA_PREFIXES:
+        return value
+    try:
+        float(stripped)
+    except ValueError:
         return "'" + value
     return value
 

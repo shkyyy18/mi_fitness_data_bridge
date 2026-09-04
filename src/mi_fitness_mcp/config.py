@@ -27,8 +27,6 @@ class Config(BaseModel):
     logs_path: Path = Field(default_factory=_default_logs_path)
     auto_sync_on_start: bool = True
     stale_after_minutes: int = 60
-    # 健康数据原始云端 payload 默认不落盘；显式开启才存。
-    store_raw_payloads: bool = False
     default_lookback_days: int = Field(default=30, ge=1, le=3650)
     sync_chunk_days: int = Field(default=7, ge=1, le=90)
     http_timeout_seconds: float = Field(default=20.0, gt=0, le=120)

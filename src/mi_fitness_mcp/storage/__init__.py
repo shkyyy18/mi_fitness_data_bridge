@@ -360,10 +360,13 @@ class Database:
                     time_asleep_minutes, time_awake_minutes, sleep_score, is_nap, stages
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id, sleep_id) DO UPDATE SET
+                    start_at = excluded.start_at,
+                    end_at = excluded.end_at,
                     duration_minutes = excluded.duration_minutes,
                     time_asleep_minutes = excluded.time_asleep_minutes,
                     time_awake_minutes = excluded.time_awake_minutes,
                     sleep_score = excluded.sleep_score,
+                    is_nap = excluded.is_nap,
                     stages = excluded.stages,
                     updated_at = CURRENT_TIMESTAMP
                 """,
@@ -409,11 +412,16 @@ class Database:
                     max_heart_rate_bpm, avg_pace_sec_per_km, max_pace_sec_per_km, total_steps
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id, workout_id) DO UPDATE SET
+                    activity_type = excluded.activity_type,
+                    end_at = excluded.end_at,
                     duration_minutes = excluded.duration_minutes,
                     distance_m = excluded.distance_m,
                     calories_kcal = excluded.calories_kcal,
                     avg_heart_rate_bpm = excluded.avg_heart_rate_bpm,
                     max_heart_rate_bpm = excluded.max_heart_rate_bpm,
+                    avg_pace_sec_per_km = excluded.avg_pace_sec_per_km,
+                    max_pace_sec_per_km = excluded.max_pace_sec_per_km,
+                    total_steps = excluded.total_steps,
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 (
@@ -466,6 +474,10 @@ class Database:
                     body_fat_pct = excluded.body_fat_pct,
                     muscle_mass_kg = excluded.muscle_mass_kg,
                     water_pct = excluded.water_pct,
+                    bone_mass_kg = excluded.bone_mass_kg,
+                    visceral_fat_score = excluded.visceral_fat_score,
+                    basal_metabolism_kcal = excluded.basal_metabolism_kcal,
+                    metabolic_age = excluded.metabolic_age,
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 (

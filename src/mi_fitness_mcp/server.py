@@ -13,7 +13,7 @@ from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
 from mi_fitness_mcp.adapters.mi_fitness_cloud import MiFitnessCloudAdapter
-from mi_fitness_mcp.auth import load_mi_fitness_token
+from mi_fitness_mcp.auth import load_mi_fitness_token, mask_account_id
 from mi_fitness_mcp.config import load_config
 from mi_fitness_mcp.models import ConnectionStatus, QueryResponse
 from mi_fitness_mcp.services.query_service import QueryService
@@ -524,16 +524,6 @@ async def _run_sync_data(arguments: dict, sync_id: str | None = None) -> dict:
     }
 
 
-def _mask_account_id(user_id: str | None) -> str | None:
-    """Mask an account identifier before it is sent to the model: keep the
-    first 3 and last 2 characters, replace the middle with asterisks."""
-    if not user_id:
-        return None
-    if len(user_id) <= 5:
-        return "*" * len(user_id)
-    return f"{user_id[:3]}{'*' * (len(user_id) - 5)}{user_id[-2:]}"
-
-
 async def _handle_get_profile() -> dict:
     if not adapter or not adapter.is_connected():
         return {"status": "error", "error": "Not connected to data source"}
@@ -542,8 +532,8 @@ async def _handle_get_profile() -> dict:
         source=config.mode if config else "unknown",
         data={
             "profile": {
-                # 不向模型返回明文 user_id, 只给掩码形式。
-                "account_id_masked": _mask_account_id(adapter.get_user_id()),
+                # 不向模型返回明文 user_id, 只给掩码形式（与 CLI 共用同一掩码函数）。
+                "account_id_masked": mask_account_id(adapter.get_user_id()),
                 "timezone": config.timezone if config else "UTC",
                 "devices": [],
             }

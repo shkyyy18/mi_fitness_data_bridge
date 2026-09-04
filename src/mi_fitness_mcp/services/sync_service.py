@@ -152,16 +152,18 @@ class SyncService:
                 }
             for key in totals:
                 totals[key] += result[key]
-            chunks.append(
-                {
-                    "start_date": chunk_start_text,
-                    "end_date": chunk_end_text,
-                    "status": "ok",
-                    "added": result["added"],
-                    "updated": result["updated"],
-                    "skipped": result["skipped"],
-                }
-            )
+            chunk = {
+                "start_date": chunk_start_text,
+                "end_date": chunk_end_text,
+                "status": "ok",
+                "added": result["added"],
+                "updated": result["updated"],
+                "skipped": result["skipped"],
+            }
+            bad_records = result.get("bad_records")
+            if bad_records:
+                chunk["bad_records"] = bad_records
+            chunks.append(chunk)
             cursor = chunk_end + timedelta(days=1)
 
         return {
@@ -173,103 +175,84 @@ class SyncService:
             "chunks": chunks,
         }
 
+    # 数据类型 -> (adapter 迭代方法, 入库方法, 水位时间字段)
+    _SYNC_TARGETS = {
+        "daily_activity": ("iter_daily_activity", "insert_daily_activity", "collected_at"),
+        "sleep": ("iter_sleep_sessions", "insert_sleep_session", "start_at"),
+        "workouts": ("iter_workouts", "insert_workout", "start_at"),
+        "body_measurements": (
+            "iter_body_measurements",
+            "insert_body_measurement",
+            "timestamp",
+        ),
+        "heart_rate": ("iter_heart_rate", "insert_heart_rate_sample", "timestamp"),
+        "spo2": ("iter_spo2", "insert_spo2_sample", "timestamp"),
+        "stress": ("iter_stress", "insert_stress_sample", "timestamp"),
+        "abnormal_heart_beat": (
+            "iter_abnormal_heart_beat",
+            "insert_abnormal_heart_beat_event",
+            "start_at",
+        ),
+    }
+
+    # 每个 range 最多带回的坏记录条数，避免异常结果无限膨胀。
+    _MAX_BAD_RECORDS = 20
+
     async def _sync_range(self, data_type: str, start_date: str, end_date: str) -> dict:
+        target = self._SYNC_TARGETS.get(data_type)
+        if target is None:
+            raise ValueError(f"Unknown data type: {data_type}")
+        iter_name, insert_name, ts_attr = target
+
+        records = getattr(self.adapter, iter_name)(start_date, end_date)
+        insert = getattr(self.db, insert_name)
+
         added = 0
         updated = 0
         skipped = 0
         last_ts = None
+        bad_records: list[dict] = []
 
-        # 按数据类型执行同步
-        if data_type == "daily_activity":
-            records = self.adapter.iter_daily_activity(start_date, end_date)
-            async for activity in self._iterate_records(records):
-                if self.db.insert_daily_activity(activity):
-                    added += 1
-                else:
-                    updated += 1
-                if last_ts is None or (activity.collected_at and activity.collected_at > last_ts):
-                    last_ts = activity.collected_at
+        async for record in self._iterate_records(records):
+            # 逐记录隔离：单条坏记录（入库/字段异常）只计入 skipped，
+            # 不中断本 range 的其余记录，也不卡住水位。
+            try:
+                inserted = insert(record)
+                record_ts = getattr(record, ts_attr, None)
+            except Exception as exc:
+                skipped += 1
+                if len(bad_records) < self._MAX_BAD_RECORDS:
+                    # 只记可识别键与异常类型，错误文本截断，不落敏感值全文。
+                    bad_records.append(
+                        {
+                            "data_type": data_type,
+                            "record_id": str(getattr(record, "id", None) or "unknown"),
+                            "error_type": type(exc).__name__,
+                            "error": str(exc)[:200],
+                        }
+                    )
+                logger.warning(
+                    "Skipping bad %s record %s: %s: %s",
+                    data_type,
+                    getattr(record, "id", None),
+                    type(exc).__name__,
+                    exc,
+                )
+                continue
+            if inserted:
+                added += 1
+            else:
+                updated += 1
+            if record_ts is not None and (last_ts is None or record_ts > last_ts):
+                last_ts = record_ts
 
-        elif data_type == "sleep":
-            records = self.adapter.iter_sleep_sessions(start_date, end_date)
-            async for sleep in self._iterate_records(records):
-                if self.db.insert_sleep_session(sleep):
-                    added += 1
-                else:
-                    updated += 1
-                if last_ts is None or sleep.start_at > last_ts:
-                    last_ts = sleep.start_at
-
-        elif data_type == "workouts":
-            records = self.adapter.iter_workouts(start_date, end_date)
-            async for workout in self._iterate_records(records):
-                if self.db.insert_workout(workout):
-                    added += 1
-                else:
-                    updated += 1
-                if last_ts is None or workout.start_at > last_ts:
-                    last_ts = workout.start_at
-
-        elif data_type == "body_measurements":
-            records = self.adapter.iter_body_measurements(start_date, end_date)
-            async for measurement in self._iterate_records(records):
-                if self.db.insert_body_measurement(measurement):
-                    added += 1
-                else:
-                    updated += 1
-                if last_ts is None or measurement.timestamp > last_ts:
-                    last_ts = measurement.timestamp
-
-        elif data_type == "heart_rate":
-            records = self.adapter.iter_heart_rate(start_date, end_date)
-            async for sample in self._iterate_records(records):
-                if self.db.insert_heart_rate_sample(sample):
-                    added += 1
-                else:
-                    updated += 1
-                if last_ts is None or sample.timestamp > last_ts:
-                    last_ts = sample.timestamp
-
-        elif data_type == "spo2":
-            records = self.adapter.iter_spo2(start_date, end_date)
-            async for sample in self._iterate_records(records):
-                if self.db.insert_spo2_sample(sample):
-                    added += 1
-                else:
-                    updated += 1
-                if last_ts is None or sample.timestamp > last_ts:
-                    last_ts = sample.timestamp
-
-        elif data_type == "stress":
-            records = self.adapter.iter_stress(start_date, end_date)
-            async for sample in self._iterate_records(records):
-                if self.db.insert_stress_sample(sample):
-                    added += 1
-                else:
-                    updated += 1
-                if last_ts is None or sample.timestamp > last_ts:
-                    last_ts = sample.timestamp
-
-        elif data_type == "abnormal_heart_beat":
-            records = self.adapter.iter_abnormal_heart_beat(start_date, end_date)
-            async for event in self._iterate_records(records):
-                if self.db.insert_abnormal_heart_beat_event(event):
-                    added += 1
-                else:
-                    updated += 1
-                if last_ts is None or event.start_at > last_ts:
-                    last_ts = event.start_at
-
-        else:
-            raise ValueError(f"Unknown data type: {data_type}")
-
-        # 更新同步状态
+        # 更新同步状态：水位只取成功记录的时间，坏记录不能卡住水位。
         if last_ts:
             self.db.update_sync_state(data_type, last_ts)
 
         logger.info(
             f"Synced {data_type}: {added} added, {updated} updated, "
-            f"range {start_date} to {end_date}"
+            f"{skipped} skipped, range {start_date} to {end_date}"
         )
 
         return {
@@ -277,6 +260,7 @@ class SyncService:
             "added": added,
             "updated": updated,
             "skipped": skipped,
+            "bad_records": bad_records,
             "start_date": start_date,
             "end_date": end_date,
         }

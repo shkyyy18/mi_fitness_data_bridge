@@ -12,11 +12,24 @@ import json
 import httpx
 import pytest
 
+from mi_fitness_mcp.adapters import mi_fitness_cloud
 from mi_fitness_mcp.adapters.mi_fitness_cloud import (
     LOGIN_PREFIX,
     MiFitnessCloudAdapter,
     _is_allowed_login_redirect,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_real_keyring_write(monkeypatch):
+    """Login now persists the rotated passToken; never touch the real keyring."""
+    saved: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        mi_fitness_cloud,
+        "save_mi_fitness_token",
+        lambda user_id, pass_token: saved.append((user_id, pass_token)),
+    )
+    return saved
 
 
 @pytest.mark.parametrize(
@@ -101,4 +114,28 @@ def test_login_follows_allowed_xiaomi_redirect():
 
     assert client.requested_urls[-1] == "https://sts.api.mi.com/auth2"
     assert adapter._cookies == "serviceToken=abc"
+    assert adapter.pass_token == "synthetic-new-token"
+
+
+def test_login_persists_rotated_pass_token_to_keyring(_no_real_keyring_write):
+    adapter = MiFitnessCloudAdapter(user_id="synthetic-user", pass_token="synthetic-token")
+    adapter._client = _RecordingClient("https://sts.api.mi.com/auth2")
+
+    asyncio.run(adapter._login_with_token("synthetic-user", "synthetic-token"))
+
+    # 登录轮换了 passToken（synthetic-token -> synthetic-new-token），必须写回 keyring。
+    assert _no_real_keyring_write == [("12345", "synthetic-new-token")]
+
+
+def test_login_token_persistence_failure_does_not_break_sync(monkeypatch):
+    adapter = MiFitnessCloudAdapter(user_id="synthetic-user", pass_token="synthetic-token")
+    adapter._client = _RecordingClient("https://sts.api.mi.com/auth2")
+
+    def failing_save(user_id, pass_token):
+        raise RuntimeError("synthetic keyring write failure")
+
+    monkeypatch.setattr(mi_fitness_cloud, "save_mi_fitness_token", failing_save)
+
+    # 写 keyring 失败只记 warning，登录流程本身仍然成功。
+    asyncio.run(adapter._login_with_token("synthetic-user", "synthetic-token"))
     assert adapter.pass_token == "synthetic-new-token"

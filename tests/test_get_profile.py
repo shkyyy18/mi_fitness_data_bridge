@@ -26,14 +26,20 @@ def test_get_profile_returns_masked_account_id(monkeypatch):
     result = asyncio.run(server._handle_get_profile())
 
     profile = result["data"]["profile"]
-    assert profile["account_id_masked"] == "123*****90"
+    assert profile["account_id_masked"] == "******90"
     assert "user_id" not in profile
     assert "1234567890" not in str(profile)
     assert profile["timezone"] == "Asia/Shanghai"
 
 
-def test_mask_account_id_handles_short_and_missing_ids():
-    assert server._mask_account_id(None) is None
-    assert server._mask_account_id("") is None
-    assert server._mask_account_id("12345") == "*****"
-    assert server._mask_account_id("123456") == "123*56"
+def test_mask_account_id_unified_format_between_server_and_cli():
+    # server 与 CLI 共用 auth.mask_account_id：固定 6 个星号、只留末 2 位。
+    from mi_fitness_mcp.auth import mask_account_id
+
+    assert mask_account_id(None) is None
+    assert mask_account_id("") is None
+    assert mask_account_id("  ") is None
+    assert mask_account_id("ab") == "******"
+    assert mask_account_id("12345") == "******45"
+    assert mask_account_id("1234567890") == "******90"
+    assert server.mask_account_id is mask_account_id

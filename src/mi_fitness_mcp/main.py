@@ -9,6 +9,7 @@ from mi_fitness_mcp.adapters.mi_fitness_cloud import MiFitnessCloudAdapter
 from mi_fitness_mcp.auth import (
     keyring_backend_warning,
     load_mi_fitness_token,
+    mask_account_id,
     save_mi_fitness_token,
 )
 from mi_fitness_mcp.config import (
@@ -24,13 +25,6 @@ from mi_fitness_mcp.services.sync_service import SyncService
 from mi_fitness_mcp.storage import Database
 
 PROGRAM_NAME = "mi-fitness-bridge"
-
-
-def _masked(value: str) -> str:
-    value = value.strip()
-    if len(value) <= 4:
-        return "****"
-    return f"{value[:2]}***{value[-2:]}"
 
 
 def _apply_database_override(config: Config, args) -> Config:
@@ -129,7 +123,7 @@ def cmd_doctor(args):
         user_id, pass_token = load_mi_fitness_token()
         if user_id and pass_token:
             print("✅ 已找到 Mi Fitness 凭据")
-            print(f"   User ID: {_masked(user_id)}")
+            print(f"   User ID: {mask_account_id(user_id)}")
             print(f"   Region: {config.region}")
             adapter = _create_cloud_adapter(user_id, pass_token, config)
             connected, data_types, region = asyncio.run(
@@ -148,6 +142,12 @@ def cmd_doctor(args):
 
         print()
         print(f"数据库： {config.database_path}")
+        if resolve_database_path(getattr(args, "db", None)) is not None:
+            # 非默认路径（--db 或 MI_FITNESS_DB_PATH）：Windows 上本工具不会为
+            # 自定义位置设置 ACL，只提醒用户自行确认，不写 icacls。
+            print("⚠️  警告： 正在使用非默认数据库路径（--db 或 MI_FITNESS_DB_PATH）")
+            print("   Windows 下自定义路径不会自动收紧 ACL，请自行确认该数据库文件")
+            print("   仅当前用户可读写（可用 icacls 检查）。")
         if config.database_path.exists():
             Database(config.database_path)
             print("✅ 数据库可用")

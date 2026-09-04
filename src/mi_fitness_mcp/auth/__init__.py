@@ -53,6 +53,22 @@ def load_mi_fitness_token() -> tuple[str | None, str | None]:
         return None, None
 
 
+def mask_account_id(value: str | None) -> str | None:
+    """统一的账号标识掩码：固定 6 个星号，只保留末 2 位。
+
+    长度 ≤2 的输入全掩码（不保留任何字符）；空值/None 返回 None。
+    server 与 CLI 必须使用同一个掩码格式，避免两处输出不一致泄露长度信息。
+    """
+    if not value:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    if len(value) <= 2:
+        return "*" * 6
+    return f"{'*' * 6}{value[-2:]}"
+
+
 def delete_mi_fitness_token() -> None:
     try:
         keyring.delete_password(SERVICE_NAME, f"{ACCOUNT_NAME}_user_id")

@@ -143,3 +143,44 @@ def test_export_rejects_reversed_date_range(tmp_path):
             start_date="2026-07-15",
             end_date="2026-07-14",
         )
+
+
+def test_csv_export_does_not_escape_numeric_strings(tmp_path):
+    """纯数字字符串（含负数/小数）不是公式；加引号前缀会造成回读失真。"""
+    database = _sample_database(tmp_path)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE daily_activity SET user_id = '-3.5' WHERE id = 'daily-1'"
+        )
+    output = tmp_path / "csv-numeric"
+
+    written = export_database(
+        database, output, output_format="csv", dataset="daily_activity"
+    )
+
+    with written[0].open(encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows[0]["user_id"] == "-3.5"
+
+
+def test_csv_export_escapes_formula_after_leading_whitespace(tmp_path):
+    """前导空白/Tab 会被电子表格忽略，剥掉后仍要以公式处理。"""
+    database = _sample_database(tmp_path)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE daily_activity SET user_id = '  =1+1' WHERE id = 'daily-1'"
+        )
+        connection.execute(
+            "UPDATE body_measurements SET user_id = '\t+cmd' WHERE id = 'body-1'"
+        )
+    output = tmp_path / "csv-whitespace"
+
+    written = export_database(database, output, output_format="csv")
+
+    with (output / "daily_activity.csv").open(encoding="utf-8-sig", newline="") as handle:
+        activity_rows = list(csv.DictReader(handle))
+    assert activity_rows[0]["user_id"] == "'  =1+1"
+    with (output / "body_measurements.csv").open(encoding="utf-8-sig", newline="") as handle:
+        body_rows = list(csv.DictReader(handle))
+    assert body_rows[0]["user_id"] == "'\t+cmd"
+    assert len(written) == 8

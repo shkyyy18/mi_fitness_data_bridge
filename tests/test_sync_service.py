@@ -92,3 +92,92 @@ def test_sync_service_returns_partial_result_and_releases_lock_after_chunk_failu
     assert result["error_code"] == "RuntimeError"
     assert result["chunks"][1]["status"] == "error"
     assert service.sync_in_progress is False
+
+
+class RangeAdapter(ConnectedAdapter):
+    """Yields three daily_activity records, the middle one is bad."""
+
+    def iter_daily_activity(self, start_date, end_date):
+        async def gen():
+            from datetime import datetime
+            from types import SimpleNamespace
+
+            yield SimpleNamespace(id="good-1", collected_at=datetime(2026, 7, 1, 8))
+            yield SimpleNamespace(id="bad-1", collected_at=datetime(2026, 7, 2, 8))
+            yield SimpleNamespace(id="good-2", collected_at=datetime(2026, 7, 3, 8))
+
+        return gen()
+
+
+class RangeDatabase(FakeDatabase):
+    def __init__(self):
+        super().__init__()
+        self.sync_state_updates = []
+
+    def insert_daily_activity(self, record):
+        if record.id == "bad-1":
+            raise ValueError("synthetic bad record")
+        return True
+
+    def update_sync_state(self, data_type, last_ts):
+        self.sync_state_updates.append((data_type, last_ts))
+
+
+def test_sync_range_isolates_bad_records_and_advances_watermark():
+    from datetime import datetime
+
+    db = RangeDatabase()
+    service = SyncService(RangeAdapter(), db, chunk_days=7)
+
+    result = asyncio.run(service._sync_range("daily_activity", "2026-07-01", "2026-07-07"))
+
+    # 坏记录不中断本 range：两条好记录照常入库，skipped 真实自增。
+    assert result["added"] == 2
+    assert result["skipped"] == 1
+    assert len(result["bad_records"]) == 1
+    bad = result["bad_records"][0]
+    assert bad["data_type"] == "daily_activity"
+    assert bad["record_id"] == "bad-1"
+    assert bad["error_type"] == "ValueError"
+    assert "synthetic bad record" in bad["error"]
+    # 水位只用成功记录的 last_ts，坏记录不能卡住水位。
+    assert db.sync_state_updates == [("daily_activity", datetime(2026, 7, 3, 8))]
+
+
+def test_sync_range_caps_bad_records_at_twenty():
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    class AllBadAdapter(ConnectedAdapter):
+        def iter_spo2(self, start_date, end_date):
+            async def gen():
+                for i in range(25):
+                    yield SimpleNamespace(id=f"bad-{i}", timestamp=datetime(2026, 7, 1))
+
+            return gen()
+
+    class AllBadDatabase(FakeDatabase):
+        def insert_spo2_sample(self, record):
+            raise RuntimeError("always fails")
+
+    service = SyncService(AllBadAdapter(), AllBadDatabase(), chunk_days=7)
+    result = asyncio.run(service._sync_range("spo2", "2026-07-01", "2026-07-07"))
+
+    assert result["skipped"] == 25
+    assert len(result["bad_records"]) == 20
+
+
+def test_sync_data_type_surfaces_bad_records_in_chunks():
+    db = RangeDatabase()
+    service = SyncService(RangeAdapter(), db, chunk_days=7)
+
+    result = asyncio.run(
+        service.sync_data_type(
+            "daily_activity", start_date="2026-07-01", end_date="2026-07-03"
+        )
+    )
+
+    assert result["status"] == "ok"
+    assert result["added"] == 2
+    assert result["skipped"] == 1
+    assert result["chunks"][0]["bad_records"][0]["record_id"] == "bad-1"
