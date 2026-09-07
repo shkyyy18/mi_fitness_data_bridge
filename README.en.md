@@ -20,15 +20,13 @@ Local-first data bridge for exporting **your own** Mi Fitness health data to SQL
 
 ## Verified demo
 
-Captured on 2026-07-20 on Windows (Python 3.14) against commit on `main`. All data is synthetic; no credentials or network access are involved.
+Tests and synthetic exports reverified on 2026-09-07 on Windows (Python 3.14). The sample records below retain their July dates. Tests use synthetic data and HTTP mocks only, without real credentials or calls to Xiaomi endpoints. Passing tests does not establish that live account login works.
 
 Test suite:
 
 ```text
 $ python -m pytest -q -p no:cacheprovider
-........................................................................ [ 96%]
-...                                                                      [100%]
-113 passed (2026-09-07 verification)
+136 passed (2026-09-07 verification)
 ```
 
 End-to-end synthetic demo (`examples/synthetic_demo.py` seeds a local SQLite cache with synthetic records, then runs the real JSON/CSV export pipeline):
@@ -287,7 +285,7 @@ This is a young, single-maintainer project, and we would rather show real number
 - **Stars:** 1 — currently the only star across the maintainer's entire GitHub account, and it is on this repository. If this bridge is useful to you, your star genuinely stands out.
 - **Traffic (GitHub insights, 14 days ending 2026-07-25):** 36 unique cloners, 2 unique visitors.
 - **External contributions:** two outside pull requests merged so far (#3 docs, #7 feature), and #10 is under review. The queue is open and curated; see the [good first issues](https://github.com/shkyyy18/mi_fitness_data_bridge/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
-- **Test suite:** 113 tests pass locally (`python -m pytest -q -p no:cacheprovider`), verified 2026-09-07 with Python 3.14 on Windows.
+- **Test suite:** 136 tests pass locally (`python -m pytest -q -p no:cacheprovider`), verified 2026-09-07 with Python 3.14 on Windows.
 
 The maintainer's sibling project [AgentCron](https://github.com/shkyyy18/cc-autopilot) received its first three external pull requests through exactly this kind of good-first-issue queue; the [first-contribution case study](https://github.com/shkyyy18/cc-autopilot/blob/main/docs/first-contribution-case-study.md) documents what made those tasks approachable. The same design is applied here: small scope, written acceptance criteria, offline-verifiable with synthetic data, and no real health data ever required.
 

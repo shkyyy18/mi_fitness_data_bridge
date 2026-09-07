@@ -59,10 +59,15 @@ def _is_authentication_error(code: Any, message: str) -> bool:
 
 
 def _read_login_payload(text: str) -> dict:
-    payload = text.encode()
-    if not payload.startswith(LOGIN_PREFIX):
-        raise RuntimeError("unexpected Xiaomi login response")
-    return json.loads(payload[len(LOGIN_PREFIX) :].decode())
+    if not text.startswith(LOGIN_PREFIX.decode()):
+        raise MiFitnessAuthenticationError("unexpected Xiaomi login response")
+    try:
+        payload = json.loads(text[len(LOGIN_PREFIX) :])
+    except ValueError:
+        raise MiFitnessAuthenticationError("invalid Xiaomi login JSON response") from None
+    if not isinstance(payload, dict):
+        raise MiFitnessAuthenticationError("invalid Xiaomi login response shape")
+    return payload
 
 
 # The login response carries a redirect `location` chosen by the server. Only
@@ -72,10 +77,16 @@ _LOGIN_REDIRECT_HOSTS = ("xiaomi.com", "mi.com")
 
 
 def _is_allowed_login_redirect(url: str) -> bool:
-    parsed = urlparse(url)
-    if parsed.scheme != "https":
+    if not isinstance(url, str) or any(char.isspace() or ord(char) < 32 for char in url):
         return False
-    host = (parsed.hostname or "").lower()
+    try:
+        parsed = urlparse(url)
+        if (parsed.scheme != "https" or parsed.username is not None
+                or parsed.password is not None or parsed.port not in (None, 443)):
+            return False
+        host = (parsed.hostname or "").lower()
+    except ValueError:
+        return False
     return host in _LOGIN_REDIRECT_HOSTS or host.endswith(
         tuple(f".{domain}" for domain in _LOGIN_REDIRECT_HOSTS)
     )
@@ -216,20 +227,36 @@ class MiFitnessCloudAdapter(DataAdapter):
         required = ("passToken", "userId", "ssecurity", "location")
         missing = [key for key in required if not payload.get(key)]
         if missing:
-            detail = payload.get("description") or payload.get("msg") or payload.get("error")
-            suffix = f": {detail}" if detail else ""
+            # Never include server-controlled descriptions or credential values in errors.
             raise MiFitnessAuthenticationError(
                 "Xiaomi login response is missing required fields "
-                f"({', '.join(missing)}){suffix}"
+                f"({', '.join(missing)})"
             )
-        try:
-            new_pass_token = str(payload["passToken"])
-            new_user_id = str(payload["userId"])
-            ssecurity = base64.b64decode(payload["ssecurity"], validate=True)
-        except (ValueError, TypeError, binascii.Error) as exc:
+        if (
+            not all(isinstance(payload[key], str) for key in ("passToken", "ssecurity"))
+            or type(payload["userId"]) not in (str, int)
+        ):
             raise MiFitnessAuthenticationError(
                 "Xiaomi login response contains invalid authentication fields"
-            ) from exc
+            )
+        new_pass_token = payload["passToken"]
+        new_user_id = str(payload["userId"])
+        if any(char.isspace() or ord(char) < 32 or char == ";"
+               for value in (new_pass_token, new_user_id) for char in value):
+            raise MiFitnessAuthenticationError(
+                "Xiaomi login response contains invalid authentication fields"
+            )
+        try:
+            ssecurity = base64.b64decode(payload["ssecurity"], validate=True)
+        except (ValueError, TypeError, binascii.Error):
+            raise MiFitnessAuthenticationError(
+                "Xiaomi login response contains invalid authentication fields"
+            ) from None
+        location = payload["location"]
+        if not _is_allowed_login_redirect(location):
+            raise MiFitnessAuthenticationError("Refusing untrusted login redirect location")
+        # Validate the complete response before updating local state or keyring.
+        # Preserve a valid rotated token even if the subsequent network request fails.
         rotated = new_pass_token != pass_token
         self.pass_token = new_pass_token
         self.user_id = new_user_id
@@ -240,15 +267,19 @@ class MiFitnessCloudAdapter(DataAdapter):
             # 否则下次启动仍拿旧 token 登录会直接失败。写失败只告警，不中断同步。
             try:
                 save_mi_fitness_token(self.user_id, self.pass_token)
-            except Exception as exc:
-                logger.warning("Failed to persist rotated passToken to keyring: %s", exc)
+            except Exception:
+                logger.warning("Failed to persist rotated passToken to keyring")
 
-        location = payload["location"]
-        if not _is_allowed_login_redirect(location):
-            raise RuntimeError(f"Refusing untrusted login redirect location: {location!r}")
-        redirect = await self._client.get(location)
-        redirect.raise_for_status()
+        try:
+            redirect = await self._client.get(location)
+            redirect.raise_for_status()
+        except httpx.HTTPError:
+            # HTTP exceptions may contain a credential-bearing redirect query string.
+            raise MiFitnessAuthenticationError("Xiaomi login redirect request failed") from None
         cookie_parts = [value.split(";", 1)[0] for value in redirect.headers.get_list("set-cookie")]
+        if not any(part.startswith("serviceToken=") and part != "serviceToken="
+                   for part in cookie_parts):
+            raise MiFitnessAuthenticationError("Xiaomi login response is missing serviceToken cookie")
         self._cookies = "; ".join(cookie_parts)
 
     async def _request(self, base_url: str, api_path: str, payload: dict) -> dict:

@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Reject malformed login JSON, invalid field types/redirects and missing session cookies with credential-safe errors; validate responses before changing adapter/keyring state.
+- Preserve valid token rotation on redirect network failure without including redirect URLs or keyring exception content in diagnostics; add respx protocol regressions.
+
 - Validate Xiaomi login payload fields before reading authentication values, returning a clear authentication error instead of leaking `KeyError`/base64 parsing exceptions when the cloud response is incomplete.
 - Added synthetic regression coverage for incomplete and malformed login payloads.
 

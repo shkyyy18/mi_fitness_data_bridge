@@ -23,7 +23,7 @@ python -m ruff check src tests
 ## 既有工作规则（原文保留）
 
 - Read `PROJECT_GUIDE.md` and `README.md` before work.
-- Use `D:\AIWork\repos\mi_fitness_data_bridge` as the stable path.
+- Use `D:\AIWork\repos\mi-fitness-bridge-audit` as the stable path.
 - Keep credentials, databases, exports, logs, caches, and personal health data out of Git.
 - Do not duplicate this connector inside downstream projects.
 - Preserve the experimental/unofficial status and upstream MIT attribution.
