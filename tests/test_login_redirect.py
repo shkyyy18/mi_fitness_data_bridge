@@ -139,3 +139,47 @@ def test_login_token_persistence_failure_does_not_break_sync(monkeypatch):
     # 写 keyring 失败只记 warning，登录流程本身仍然成功。
     asyncio.run(adapter._login_with_token("synthetic-user", "synthetic-token"))
     assert adapter.pass_token == "synthetic-new-token"
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("passToken", "", "passToken"),
+        ("userId", "", "userId"),
+        ("ssecurity", "", "ssecurity"),
+        ("location", "", "location"),
+    ],
+)
+def test_login_rejects_incomplete_payload(field, value, match):
+    adapter = MiFitnessCloudAdapter(user_id="synthetic-user", pass_token="synthetic-token")
+    client = _RecordingClient("https://sts.api.mi.com/auth2")
+    payload = {
+        "passToken": "synthetic-new-token",
+        "userId": 12345,
+        "ssecurity": base64.b64encode(b"synthetic-ssecurity").decode(),
+        "location": "https://sts.api.mi.com/auth2",
+    }
+    payload[field] = value
+    client._login_text = LOGIN_PREFIX.decode() + json.dumps(payload)
+    adapter._client = client
+
+    with pytest.raises(mi_fitness_cloud.MiFitnessAuthenticationError, match=match):
+        asyncio.run(adapter._login_with_token("synthetic-user", "synthetic-token"))
+
+    assert client.requested_urls and len(client.requested_urls) == 1
+
+
+def test_login_rejects_invalid_ssecurity_payload():
+    adapter = MiFitnessCloudAdapter(user_id="synthetic-user", pass_token="synthetic-token")
+    client = _RecordingClient("https://sts.api.mi.com/auth2")
+    payload = {
+        "passToken": "synthetic-new-token",
+        "userId": 12345,
+        "ssecurity": "not-valid-base64!",
+        "location": "https://sts.api.mi.com/auth2",
+    }
+    client._login_text = LOGIN_PREFIX.decode() + json.dumps(payload)
+    adapter._client = client
+
+    with pytest.raises(mi_fitness_cloud.MiFitnessAuthenticationError, match="invalid authentication fields"):
+        asyncio.run(adapter._login_with_token("synthetic-user", "synthetic-token"))

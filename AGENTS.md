@@ -1,4 +1,4 @@
-# AGENTS.md — 米桥（mi-bridge，原 mi-fitness-data-bridge）
+# AGENTS.md — 米桥（mi-bridge，原 mi_fitness_data_bridge）
 
 > 本文件在原有 9 行工作规则基础上扩展。原有规则仍然有效，保留在「既有工作规则」一节。
 
@@ -23,7 +23,7 @@ python -m ruff check src tests
 ## 既有工作规则（原文保留）
 
 - Read `PROJECT_GUIDE.md` and `README.md` before work.
-- Use `D:\AIWorkspace\projects\mi_fitness_data_bridge` as the stable path.
+- Use `D:\AIWork\repos\mi_fitness_data_bridge` as the stable path.
 - Keep credentials, databases, exports, logs, caches, and personal health data out of Git.
 - Do not duplicate this connector inside downstream projects.
 - Preserve the experimental/unofficial status and upstream MIT attribution.

@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import binascii
 import hashlib
 import json
 import logging
@@ -212,11 +213,27 @@ class MiFitnessCloudAdapter(DataAdapter):
         )
         response.raise_for_status()
         payload = _read_login_payload(response.text)
-        new_pass_token = payload["passToken"]
+        required = ("passToken", "userId", "ssecurity", "location")
+        missing = [key for key in required if not payload.get(key)]
+        if missing:
+            detail = payload.get("description") or payload.get("msg") or payload.get("error")
+            suffix = f": {detail}" if detail else ""
+            raise MiFitnessAuthenticationError(
+                "Xiaomi login response is missing required fields "
+                f"({', '.join(missing)}){suffix}"
+            )
+        try:
+            new_pass_token = str(payload["passToken"])
+            new_user_id = str(payload["userId"])
+            ssecurity = base64.b64decode(payload["ssecurity"], validate=True)
+        except (ValueError, TypeError, binascii.Error) as exc:
+            raise MiFitnessAuthenticationError(
+                "Xiaomi login response contains invalid authentication fields"
+            ) from exc
         rotated = new_pass_token != pass_token
         self.pass_token = new_pass_token
-        self.user_id = str(payload["userId"])
-        self._ssecurity = base64.b64decode(payload["ssecurity"])
+        self.user_id = new_user_id
+        self._ssecurity = ssecurity
 
         if rotated:
             # 每次登录都会轮换 passToken，旧 token 很快失效；必须写回 keyring，

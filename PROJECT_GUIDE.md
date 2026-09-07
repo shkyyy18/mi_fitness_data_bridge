@@ -2,7 +2,7 @@
 
 ## Project scope
 
-- Stable path: `D:\AIWorkspace\projects\mi_fitness_data_bridge`.
+- Stable path: `D:\AIWork\repos\mi_fitness_data_bridge`.
 - This project is the single implementation for reading a user's own Mi Fitness health data and exporting it to local standard formats.
 - It is infrastructure only: no fat-loss coaching, medical advice, personal dashboard, or business-specific analytics.
 

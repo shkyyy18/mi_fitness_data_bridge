@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Validate Xiaomi login payload fields before reading authentication values, returning a clear authentication error instead of leaking `KeyError`/base64 parsing exceptions when the cloud response is incomplete.
+- Added synthetic regression coverage for incomplete and malformed login payloads.
+
+
 ### Security
 
 - Removed the `--user-id` / `--pass-token` flags from `mi-fitness-bridge setup`; credentials are now only accepted through the interactive prompt, so a passToken can no longer end up in shell history.
@@ -97,6 +103,6 @@ All notable changes to this project will be documented in this file.
 - Preserved the `mi_fitness_mcp` Python namespace for downstream compatibility.
 - Clarified that the Xiaomi cloud adapter is unofficial and experimental.
 
-[0.3.1]: https://github.com/shkyyy18/mi-fitness-data-bridge/releases/tag/v0.3.1
-[0.3.0]: https://github.com/shkyyy18/mi-fitness-data-bridge/releases/tag/v0.3.0
-[0.2.0]: https://github.com/shkyyy18/mi-fitness-data-bridge/releases/tag/v0.2.0
+[0.3.1]: https://github.com/shkyyy18/mi_fitness_data_bridge/releases/tag/v0.3.1
+[0.3.0]: https://github.com/shkyyy18/mi_fitness_data_bridge/releases/tag/v0.3.0
+[0.2.0]: https://github.com/shkyyy18/mi_fitness_data_bridge/releases/tag/v0.2.0

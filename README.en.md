@@ -28,7 +28,7 @@ Test suite:
 $ python -m pytest -q -p no:cacheprovider
 ........................................................................ [ 96%]
 ...                                                                      [100%]
-108 passed in 18.86s
+113 passed (2026-09-07 verification)
 ```
 
 End-to-end synthetic demo (`examples/synthetic_demo.py` seeds a local SQLite cache with synthetic records, then runs the real JSON/CSV export pipeline):
@@ -287,7 +287,7 @@ This is a young, single-maintainer project, and we would rather show real number
 - **Stars:** 1 — currently the only star across the maintainer's entire GitHub account, and it is on this repository. If this bridge is useful to you, your star genuinely stands out.
 - **Traffic (GitHub insights, 14 days ending 2026-07-25):** 36 unique cloners, 2 unique visitors.
 - **External contributions:** two outside pull requests merged so far (#3 docs, #7 feature), and #10 is under review. The queue is open and curated; see the [good first issues](https://github.com/shkyyy18/mi_fitness_data_bridge/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
-- **Test suite:** 75 tests pass locally (`python -m pytest -q -p no:cacheprovider`), verified 2026-08-17 with Python 3.14 on Windows.
+- **Test suite:** 113 tests pass locally (`python -m pytest -q -p no:cacheprovider`), verified 2026-09-07 with Python 3.14 on Windows.
 
 The maintainer's sibling project [AgentCron](https://github.com/shkyyy18/cc-autopilot) received its first three external pull requests through exactly this kind of good-first-issue queue; the [first-contribution case study](https://github.com/shkyyy18/cc-autopilot/blob/main/docs/first-contribution-case-study.md) documents what made those tasks approachable. The same design is applied here: small scope, written acceptance criteria, offline-verifiable with synthetic data, and no real health data ever required.
 
