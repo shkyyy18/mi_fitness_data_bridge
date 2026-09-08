@@ -570,25 +570,36 @@ class MiFitnessCloudAdapter(DataAdapter):
                 logger.debug("Skipping malformed steps record: %s: %s", type(exc).__name__, exc)
                 continue
             date_str = collected_at.strftime("%Y-%m-%d")
-            minute_key = collected_at.isoformat()
+            # Xiaomi records from parallel devices can have different seconds within
+            # one local minute. The payload is a minute slice, so use the local
+            # minute rather than the full timestamp; otherwise those duplicates are
+            # still summed (issue #12).
+            minute_key = collected_at.strftime("%H:%M")
+            candidate = {
+                "steps": steps,
+                "distance_m": distance_m,
+                "calories": calories,
+                "zone_name": item.get("zone_name"),
+                "collected_at": collected_at,
+            }
             existing = per_minute[date_str].get(minute_key)
             if existing is None:
-                per_minute[date_str][minute_key] = {
-                    "steps": steps,
-                    "distance_m": distance_m,
-                    "calories": calories,
-                    "zone_name": item.get("zone_name"),
-                    "collected_at": collected_at,
-                }
+                per_minute[date_str][minute_key] = candidate
             else:
-                # 同一时间戳的并行来源：取大者，被压制一方的步数计入抑制量
+                # Parallel records for one minute represent the same activity.
+                # Retain one coherent source record, preferring the larger step
+                # slice and then its distance/calorie values for deterministic ties.
                 overlap_suppressed_steps += min(existing["steps"], steps)
-                if steps > existing["steps"]:
-                    existing.update(
-                        steps=steps,
-                        distance_m=max(existing["distance_m"], distance_m),
-                        calories=max(existing["calories"], calories),
-                    )
+                if (
+                    candidate["steps"],
+                    candidate["distance_m"],
+                    candidate["calories"],
+                ) > (
+                    existing["steps"],
+                    existing["distance_m"],
+                    existing["calories"],
+                ):
+                    per_minute[date_str][minute_key] = candidate
         daily: dict[str, dict[str, Any]] = defaultdict(
             lambda: {
                 "steps": 0,

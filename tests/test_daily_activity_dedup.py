@@ -31,15 +31,15 @@ class TestDailyActivityDedup(unittest.TestCase):
 
         return asyncio.run(collect())
 
-    def test_parallel_sources_same_minute_take_max_not_sum(self):
-        # 2026-09-03 09:24 上海：手机 44 步 + 手环 17 步同一分钟，应取 44 而非 61
-        t = 1756897440  # 2026-09-03T09:24:00+08:00
-        records = [_item(t, 44, 30.0, 2.0), _item(t, 17, 12.0, 1.0)]
+    def test_parallel_sources_in_same_minute_take_max_not_sum(self):
+        # 09:24:05 and 09:24:45 are the same upstream minute slice: keep 44, not 61.
+        # Issue #12 shows that parallel sources need not have identical seconds.
+        t = 1756897445  # 2026-09-03T09:24:05+08:00
+        records = [_item(t, 44, 30.0, 2.0), _item(t + 40, 17, 12.0, 1.0)]
         days = self._run(records)
         self.assertEqual(1, len(days))
         self.assertEqual(44, days[0].steps)
         self.assertEqual(30.0, days[0].distance_m)
-
     def test_distinct_minutes_still_sum(self):
         t1 = 1756897440  # 09:24
         t2 = t1 + 60  # 09:25

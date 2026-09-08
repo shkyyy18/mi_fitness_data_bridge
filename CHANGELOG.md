@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Daily-activity deduplication now groups parallel device records by local minute even when their seconds differ, retaining one coherent largest record instead of summing duplicates (fixes #12).
+
 - Reject malformed login JSON, invalid field types/redirects and missing session cookies with credential-safe errors; validate responses before changing adapter/keyring state.
 - Preserve valid token rotation on redirect network failure without including redirect URLs or keyring exception content in diagnostics; add respx protocol regressions.
 
