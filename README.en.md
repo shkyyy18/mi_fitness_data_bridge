@@ -4,7 +4,7 @@
 
 [![Glama score](https://glama.ai/mcp/servers/shkyyy18/mi_fitness_data_bridge/badges/score.svg)](https://glama.ai/mcp/servers/shkyyy18/mi_fitness_data_bridge)
 
-A local-first bridge for **your own authorized Mi Fitness health data**. It uses an unofficial, experimental cloud adapter to read that data, normalizes it into a SQLite database on your machine, and provides JSON/CSV exports, Python integration, and local MCP tools.
+A simple way to **export your Mi Fitness and related Xiaomi-device data to your own computer**. Save activity, sleep, heart-rate, weight, and other available records as SQLite, JSON, or CSV, then use ChatGPT, Claude, Gemini, or another large language model to analyze, compare, and summarize them. Python integration and a local MCP server are included so programs and local AI tools can read the data.
 
 > **Unofficial and experimental.** This project is not affiliated with, endorsed by, or supported by Xiaomi. Xiaomi, Mi Home, and Mi Fitness are trademarks of Xiaomi Corporation. The adapter relies on non-public upstream endpoints, so authentication, connectivity, or individual data types can stop working when Xiaomi changes its services, account-region behavior, devices, firmware, or authentication. Use it only with accounts and data you are authorized to access.
 
@@ -12,12 +12,14 @@ A local-first bridge for **your own authorized Mi Fitness health data**. It uses
 
 *The screenshot and every example in this README use synthetic data. No credential, account identifier, or real health export is included.*
 
+> **In one sentence:** Export your Xiaomi health data to your own computer, then let an AI model help analyze changes over time.
+
 ## What it does
 
 | Capability | Details |
 | --- | --- |
 | Local cache | Stores normalized synchronized records in a SQLite database on your machine. |
-| Portable exports | Writes one JSON file or one CSV file per dataset; exports never include the saved `passToken`. |
+| Portable exports | Writes JSON or CSV files for backup, personal analysis, or use with an AI model; exports never include the saved `passToken`. |
 | Local MCP server | Provides stdio tools for personal automation and local AI workflows. |
 | Python integration | Keeps the `mi_fitness_mcp` namespace for compatibility with existing downstream users. |
 

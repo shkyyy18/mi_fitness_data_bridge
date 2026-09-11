@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "mi-fitness-data-bridge"
 version = "0.3.1"
-description = "Local-first bridge for Mi Fitness health data, portable exports, and MCP"
+description = "Export Mi Fitness and Xiaomi-device health data for local storage and AI analysis"
 readme = "README.md"
 license = {text = "AGPL-3.0-only"}
 requires-python = ">=3.11"

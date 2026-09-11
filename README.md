@@ -4,7 +4,7 @@
 
 [![Glama score](https://glama.ai/mcp/servers/shkyyy18/mi_fitness_data_bridge/badges/score.svg)](https://glama.ai/mcp/servers/shkyyy18/mi_fitness_data_bridge)
 
-面向**本人有权访问的小米运动健康（Mi Fitness）数据**的本地优先数据桥。它通过非官方的实验性云端适配器读取数据，规范化保存到本机 SQLite，并提供 JSON/CSV 导出、Python 集成及本地 MCP 工具。
+这是一个把**小米运动健康（Mi Fitness）及相关小米设备数据导出到本地**的工具。你可以将运动、睡眠、心率、体重等数据保存为 SQLite、JSON 或 CSV 文件，再交给 ChatGPT、Claude、Gemini 等大模型进行分析、对比和总结。项目也提供 Python 接口和本地 MCP 工具，方便大模型或其他程序读取这些数据。
 
 > **非官方、实验性项目。** 本项目与小米没有隶属、背书或支持关系；小米、米家（Mi Home）和 Mi Fitness 是小米公司的商标。适配器依赖非公开上游接口，小米的服务、账户地区、设备、固件或认证方式变化后，登录、连接或某些数据类型可能随时失效。仅可用于你有权访问的账户和数据。
 
@@ -17,7 +17,7 @@
 | 功能 | 说明 |
 | --- | --- |
 | 本地缓存 | 将同步并规范化后的记录保存到你的本机 SQLite 数据库。 |
-| 可移植导出 | 导出一个 JSON 文件，或为每个数据集导出一个 CSV 文件；不会导出已保存的 `passToken`。 |
+| 可移植导出 | 导出 JSON 或 CSV 文件，便于备份、交给自己的分析工具或导入大模型；不会导出已保存的 `passToken`。 |
 | 本地 MCP 服务 | 通过标准输入/输出（stdio）提供个人自动化和本地 AI 工作流所需的查询工具。 |
 | Python 集成 | 保留 `mi_fitness_mcp` 命名空间，兼容既有下游使用者。 |
 
