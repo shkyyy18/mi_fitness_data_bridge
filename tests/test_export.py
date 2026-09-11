@@ -184,3 +184,20 @@ def test_csv_export_escapes_formula_after_leading_whitespace(tmp_path):
         body_rows = list(csv.DictReader(handle))
     assert body_rows[0]["user_id"] == "'\t+cmd"
     assert len(written) == 8
+
+
+def test_export_excludes_sensitive_columns_added_to_a_dataset(tmp_path):
+    database = _sample_database(tmp_path)
+    with sqlite3.connect(database) as connection:
+        connection.execute("ALTER TABLE daily_activity ADD COLUMN passToken TEXT")
+        connection.execute("ALTER TABLE daily_activity ADD COLUMN secret TEXT")
+        connection.execute(
+            "UPDATE daily_activity SET passToken = 'do-not-export', secret = 'private'"
+        )
+
+    target = tmp_path / "export.json"
+    export_database(database, target, output_format="json", dataset="daily_activity")
+
+    record = json.loads(target.read_text(encoding="utf-8"))["records"]["daily_activity"][0]
+    assert "passToken" not in record
+    assert "secret" not in record

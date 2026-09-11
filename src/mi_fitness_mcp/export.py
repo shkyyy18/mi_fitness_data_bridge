@@ -11,6 +11,18 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
+FORBIDDEN_EXPORT_FIELDS = {
+    "pass_token",
+    "passtoken",
+    "pass_token",
+    "token",
+    "password",
+    "secret",
+    "authorization",
+    "cookie",
+}
+
+
 DATASETS: dict[str, tuple[str, str]] = {
     "daily_activity": ("daily_activity", "date"),
     "sleep": ("sleep_sessions", "start_at"),
@@ -107,7 +119,14 @@ def _rows(
     except KeyError as exc:
         raise ValueError(f"Unsupported dataset: {dataset}") from exc
 
-    columns = [row[1] for row in connection.execute(f"PRAGMA table_info({table})")]
+    columns = [
+        row[1]
+        for row in connection.execute(f"PRAGMA table_info({table})")
+        if row[1].casefold() not in FORBIDDEN_EXPORT_FIELDS
+    ]
+    if not columns:
+        raise ValueError(f"Dataset has no exportable columns: {dataset}")
+    selected_columns = ", ".join(f'"{column.replace(chr(34), chr(34) * 2)}"' for column in columns)
     clauses: list[str] = []
     values: list[str] = []
     if start_date:
@@ -118,7 +137,7 @@ def _rows(
         values.append(end_date)
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
     result = connection.execute(
-        f"SELECT * FROM {table}{where} ORDER BY {date_column}", values
+        f"SELECT {selected_columns} FROM {table}{where} ORDER BY {date_column}", values
     ).fetchall()
     return columns, [dict(row) for row in result]
 
