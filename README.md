@@ -1,6 +1,6 @@
 > English: [README.en.md](README.en.md)
 
-# 米桥（Mi Fitness Data Bridge）
+# 小米设备数据导出skill（Mi Fitness Data Bridge）
 
 [![Glama score](https://glama.ai/mcp/servers/shkyyy18/mi_fitness_data_bridge/badges/score.svg)](https://glama.ai/mcp/servers/shkyyy18/mi_fitness_data_bridge)
 
@@ -8,7 +8,7 @@
 
 > **非官方、实验性项目。** 本项目与小米没有隶属、背书或支持关系；小米、米家（Mi Home）和 Mi Fitness 是小米公司的商标。适配器依赖非公开上游接口，小米的服务、账户地区、设备、固件或认证方式变化后，登录、连接或某些数据类型可能随时失效。仅可用于你有权访问的账户和数据。
 
-![米桥合成数据终端演示](docs/assets/bridge-synthetic-demo.png)
+![小米设备数据导出skill合成数据终端演示](docs/assets/bridge-synthetic-demo.png)
 
 *截图和本文全部示例均为合成数据；不含凭证、账户标识符或真实健康导出数据。*
 

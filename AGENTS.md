@@ -1,4 +1,4 @@
-# AGENTS.md — 米桥（mi-bridge，原 mi_fitness_data_bridge）
+# AGENTS.md — 小米设备数据导出skill（mi_fitness_data_bridge）
 
 > 本文件在原有 9 行工作规则基础上扩展。原有规则仍然有效，保留在「既有工作规则」一节。
 
