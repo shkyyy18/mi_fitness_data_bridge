@@ -3,6 +3,9 @@
 
 ## Unreleased
 
+- Correct cloud sleep stage labels to `2=deep`, `3=light`, `4=rem`, `5=awake` (#13, thanks @FibreCase), with synthetic regression coverage. Evidence is community-reported from four `cn`-region records, not a guarantee for every device or region. Code 1 remains unverified and falls back to light, as do other unknown codes.
+- Existing stored sleep stages are not migrated automatically: after updating, explicitly re-sync the affected date range with `mi-fitness-bridge sync --type sleep --start-date YYYY-MM-DD --end-date YYYY-MM-DD` (replace the date placeholders), then regenerate any exports. No credentials or real health data are needed for the regression tests.
+
 - Add an account-free bilingual static demo built only from the synthetic SQLite/JSON/CSV export fixture, plus compatibility limitations and a privacy-safe feedback form.
 - Close read-only SQLite export connections explicitly to avoid leaked file handles, including Windows temporary-file cleanup failures.
 - Add regression tests for synthetic web samples and export connection cleanup.

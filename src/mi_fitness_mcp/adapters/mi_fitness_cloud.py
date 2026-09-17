@@ -518,12 +518,12 @@ class MiFitnessCloudAdapter(DataAdapter):
         return items
 
     def _sleep_stage_name(self, state: Any) -> str:
-        # Mi Fitness cloud `items[].state` codes (verified against the
-        # authoritative top-level sleep_deep/light/rem/awake_duration fields,
-        # 2026-09-17): 2=deep, 3=light, 4=rem, 5=awake. Code 1 (out-of-bed /
-        # unused) and unknown codes default to light.
-        # NOTE: the earlier 1=deep/2=light/3=light/4=awake/5=rem table inherited
-        # from upstream mislabeled every stage (deep->light, rem->awake).
+        # Mi Fitness cloud `items[].state`: 2=deep, 3=light, 4=rem, 5=awake.
+        # Community report #13 (2026-09-17) matched segment sums to top-level
+        # sleep_deep/light/rem/awake_duration fields on four cn-region records.
+        # Code 1 was not observed; its meaning remains unverified. It and other
+        # unknown codes default to light; this fallback is not a verified stage.
+        # The earlier table mislabeled deep, REM and awake (light was correct).
         mapping = {
             2: "deep",
             3: "light",
