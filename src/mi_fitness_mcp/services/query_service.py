@@ -78,21 +78,29 @@ class QueryService:
         granularity: str = "day",
         aggregation: str = "sum",
     ) -> list[dict[str, Any]]:
-        """Get time series for a metric."""
-        summaries = self.get_daily_summaries(start_date, end_date)
+        """Return daily totals/latest daily weight, optionally reduced by week/month."""
+        if metric not in {"steps", "distance_m", "active_kcal", "weight_kg"}:
+            raise ValueError(f"Unsupported metric: {metric}")
+        if granularity not in {"day", "week", "month"}:
+            raise ValueError(f"Unsupported granularity: {granularity}")
+        if aggregation not in {"sum", "avg", "min", "max", "latest"}:
+            raise ValueError(f"Unsupported aggregation: {aggregation}")
 
-        series = []
-        for summary in summaries:
-            value = summary.get(metric)
-            if value is not None:
-                series.append(
-                    {
-                        "date": summary["date"],
-                        "value": value,
-                    }
-                )
+        if metric == "weight_kg":
+            # Measurements are timestamp-ordered; the last sample wins per stored day.
+            daily_weights = {}
+            for measurement in self.get_body_measurements(start_date, end_date):
+                day = str(measurement["timestamp"])[:10]
+                daily_weights[day] = measurement["weight_kg"]
+            series = [{"date": day, "value": value} for day, value in daily_weights.items()]
+        else:
+            series = [
+                {"date": summary["date"], "value": summary[metric]}
+                for summary in self.get_daily_summaries(start_date, end_date)
+                if summary.get(metric) is not None
+            ]
+        series.sort(key=lambda item: item["date"])
 
-        # 按需执行周/月聚合
         if granularity == "week":
             series = self._aggregate_by_week(series, aggregation)
         elif granularity == "month":
@@ -128,6 +136,8 @@ class QueryService:
                 value = min(values)
             elif aggregation == "max":
                 value = max(values)
+            elif aggregation == "latest":
+                value = values[-1]
             else:
                 value = sum(values)
 
@@ -161,6 +171,8 @@ class QueryService:
                 value = min(values)
             elif aggregation == "max":
                 value = max(values)
+            elif aggregation == "latest":
+                value = values[-1]
             else:
                 value = sum(values)
 

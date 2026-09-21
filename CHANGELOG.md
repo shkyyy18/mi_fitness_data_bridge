@@ -3,6 +3,12 @@
 
 ## Unreleased
 
+- Document all 15 MCP tools with purpose, alternatives, local/cloud effects, response shapes, units, parameter defaults and constraints; publish server guidance and explicit tool safety annotations without renaming existing tools.
+- Reject invalid calendar dates and reversed ranges before dispatch, and add schema constraints for date/range selection, dataset enums, positive sample limits and workout-series bounds.
+- Fix advertised metric-series behavior: `weight_kg` now reads the body-measurement cache (latest reading per stored day); weekly/monthly `latest` selects the last daily value instead of summing.
+- Require MCP SDK >=1.12.0,<2.0 for the tool-schema validation and metadata API used by the server; verify the lower bound as well as the installed SDK.
+- Add synthetic MCP wire-contract and metric-series regression tests. See `docs/mcp-tool-contracts.md` and `docs/tdqs-remediation-2026-09-21.md`; external TDQS re-evaluation remains pending.
+
 - Correct cloud sleep stage labels to `2=deep`, `3=light`, `4=rem`, `5=awake` (#13, thanks @FibreCase), with synthetic regression coverage. Evidence is community-reported from four `cn`-region records, not a guarantee for every device or region. Code 1 remains unverified and falls back to light, as do other unknown codes.
 - Existing stored sleep stages are not migrated automatically: after updating, explicitly re-sync the affected date range with `mi-fitness-bridge sync --type sleep --start-date YYYY-MM-DD --end-date YYYY-MM-DD` (replace the date placeholders), then regenerate any exports. No credentials or real health data are needed for the regression tests.
 

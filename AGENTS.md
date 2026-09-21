@@ -9,7 +9,7 @@
 ## 技术栈
 
 - Python ≥ 3.11，hatchling 构建，src 布局 `src/mi_fitness_mcp/`
-- 依赖：`mcp>=1.0`、`pydantic>=2`、`httpx>=0.27`、`platformdirs`、`keyring>=25`（CLI 用 argparse 实现，无 click/rich）
+- 依赖：`mcp>=1.12,<2.0`、`pydantic>=2`、`httpx>=0.27`、`platformdirs`、`keyring>=25`（CLI 用 argparse 实现，无 click/rich）
 - 测试：pytest + pytest-asyncio + respx（HTTP mock）；lint：ruff（line-length 100，select E/F/I/N/W/UP/B/C4/SIM，忽略 E501）
 
 ## 常用命令
