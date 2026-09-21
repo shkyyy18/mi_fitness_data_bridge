@@ -50,6 +50,9 @@ class SleepSession(BaseEntity):
     time_asleep_minutes: int = Field(ge=0, description="Actual sleep time")
     time_awake_minutes: int = Field(ge=0, description="Time awake during sleep")
     sleep_score: int | None = Field(None, ge=0, le=100, description="Sleep quality score")
+    sleep_score_source: Literal["sleep_record", "daily_report"] | None = Field(
+        None, description="Upstream score origin; daily_report is assigned to main sleep only"
+    )
     is_nap: bool = Field(default=False, description="Whether this is a nap")
     stages: list[SleepStage] = Field(default_factory=list, description="Sleep stages breakdown")
 

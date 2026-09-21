@@ -44,3 +44,9 @@ Do **not** attach database files, raw responses, credentials, private logs or he
 ## Privacy / 隐私
 
 Local storage and local stdio do not guarantee that an AI client/model runs offline. Query results may be forwarded by the client. Review that flow separately; do not connect this bridge to a remote or hosted proxy. Export files can include a plaintext `user_id` and must be kept private. See [SECURITY.md](../SECURITY.md).
+
+## Sleep-score fallback / 睡眠评分补取（2026-09-21）
+
+The unreleased #14 patch adds a best-effort own-account daily-report lookup using the existing region and authentication, with no relatives API or cross-region discovery. It is covered by encrypted respx mocks, including cn/de/us routing; this is **not** live-account, device or region verification. `KNOWN_REGIONS` remains a list of routing candidates only. Missing/ambiguous scores remain unavailable, and an optional report failure must not discard sleep sessions. See the README sleep-score section before re-syncing.
+
+尚未发布的 #14 补丁使用既有地区及认证尝试读取本人每日聚合睡眠报告，不接亲友接口，不跨地区探测。cn/de/us 的测试只证明模拟请求路由正确，**不代表真实设备、账户或地区已经验证可用**。如接口不支持或无法明确匹配，保留原睡眠记录，不伪造评分。升级后须重新同步；只导出不会补取。

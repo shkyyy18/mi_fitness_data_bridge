@@ -30,6 +30,7 @@ from mi_fitness_mcp.models import (
 )
 
 LOGIN_PREFIX = b"&&&START&&&"
+# Routing candidates, NOT verified compatibility for the optional sleep report API.
 KNOWN_REGIONS = ["ru", "cn", "de", "i2", "sg", "us"]
 # 2000-01-01T00:00:00Z。time 字段缺失时旧代码 int(item.get("time", 0)) 会把
 # 记录 id 塌缩成 ..._0、timestamp 塌缩到 1970；早于该时间的一律视为损坏记录。
@@ -401,6 +402,153 @@ class MiFitnessCloudAdapter(DataAdapter):
 
         return items
 
+    async def _fetch_daily_sleep_reports(self, start_date: str, end_date: str) -> list[dict]:
+        """Read this account's daily reports, never the relatives API.
+
+        Experimental contract/provenance: docs/issue-14-sleep-score-investigation.md.
+        Reuse the existing authenticated/encrypted transport and region; no probes.
+        """
+        base_url = (
+            "https://hlth.io.mi.com"
+            if self.region in ("", "cn")
+            else f"https://{self.region}.hlth.io.mi.com"
+        )
+        start_time, end_time = self._date_range_to_timestamps(start_date, end_date)
+        records: list[dict] = []
+        next_key = None
+        seen_keys: set[str] = set()
+        for _ in range(self.max_pages):
+            payload = {
+                "key": "sleep", "tag": "daily_report", "limit": 100,
+                "start_time": start_time, "end_time": end_time,
+            }
+            if next_key is not None:
+                payload["next_key"] = next_key
+            result = await self._request(
+                base_url, "/app/v1/data/get_aggregated_fitness_data_by_time", payload
+            )
+            if not isinstance(result, dict) or not isinstance(result.get("data_list"), list):
+                raise ValueError("Invalid daily sleep report response")
+            records.extend(result["data_list"])
+            if not result.get("has_more"):
+                return records
+            candidate = result.get("next_key")
+            if not isinstance(candidate, str) or not candidate or candidate in seen_keys:
+                raise ValueError("Invalid daily sleep report pagination cursor")
+            seen_keys.add(candidate)
+            next_key = candidate
+        raise RuntimeError("Daily sleep report pagination exceeded safety limit")
+
+    @staticmethod
+    def _sleep_score(payload: dict) -> int | None:
+        # Xiaomi's report models can default missing scores to zero. Keep zero
+        # unavailable, do not truncate fractional values or let a bad optional
+        # score discard an otherwise valid sleep session.
+        for name in ("score", "sleep_score"):
+            value = payload.get(name)
+            if isinstance(value, bool) or value is None:
+                continue
+            try:
+                number = float(value)
+                if number.is_integer() and 0 < number <= 100:
+                    return int(number)
+            except (ValueError, TypeError, OverflowError):
+                pass
+        return None
+
+    @staticmethod
+    def _sleep_source(value: Any) -> str | None:
+        if value is None or str(value) in ("", "default"):
+            return None
+        return str(value)
+
+    @staticmethod
+    def _main_sleep_candidate(session: SleepSession) -> bool:
+        return (
+            not session.is_nap
+            and 0 < session.duration_minutes <= 1440
+            and 0 < (session.end_at - session.start_at).total_seconds() <= 86400
+        )
+
+    def _apply_daily_sleep_scores(
+        self, sessions: list[tuple[SleepSession, str | None]], reports: list[dict]
+    ) -> None:
+        """Attach an upstream *daily* score to one unambiguous main session.
+
+        Never distribute it across naps/devices. Segment boundaries, when
+        present, are authoritative for matching; no date-only fallback on a
+        mismatch. Conflicting report scores remain unavailable.
+        """
+        proposals: dict[int, set[int]] = defaultdict(set)
+        for item in reports:
+            try:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("key", "sleep") != "sleep" or item.get("tag", "daily_report") != "daily_report":
+                    continue
+                payload = self._parse_value(item)
+                if not isinstance(payload, dict):
+                    continue
+                score = self._sleep_score(payload)
+                if score is None:
+                    continue
+                default_offset = int(self._request_timezone().utcoffset(None).total_seconds())
+                zone_offset = int(item.get("zone_offset", default_offset))
+                report_day = self._timestamp_to_datetime(
+                    self._check_timestamp(item.get("time")), zone_offset
+                ).date()
+                source = self._sleep_source(item.get("sid")) or self._sleep_source(payload.get("did"))
+                candidates = [
+                    index for index, (session, sid) in enumerate(sessions)
+                    if self._main_sleep_candidate(session)
+                    and session.end_at.date() == report_day
+                    and (source is None or sid == source)
+                ]
+                segments = payload.get("segment_details", [])
+                if not isinstance(segments, list):
+                    continue
+                if segments:
+                    # A daily score represents the main (longest) segment,
+                    # not whichever segment happens to be in this sync chunk.
+                    boundaries = set()
+                    for segment in segments:
+                        start = self._check_timestamp(segment["bedtime"])
+                        end = self._check_timestamp(segment["wake_up_time"])
+                        if not 0 < end - start <= 86400:
+                            raise ValueError("Invalid sleep report segment")
+                        boundaries.add((start, end))
+                    longest = max(end - start for start, end in boundaries)
+                    main = [(start, end) for start, end in boundaries if end - start == longest]
+                    if len(main) != 1:
+                        continue
+                    start, end = main[0]
+                    candidates = [
+                        index for index in candidates
+                        if sessions[index][0].start_at.timestamp() == start
+                        and sessions[index][0].end_at.timestamp() == end
+                    ]
+                elif candidates:
+                    # Without boundaries, do not choose between devices. For
+                    # one source, use a uniquely longest main sleep only.
+                    if len({sessions[index][1] for index in candidates}) != 1:
+                        continue
+                    longest = max(sessions[index][0].duration_minutes for index in candidates)
+                    candidates = [
+                        index for index in candidates
+                        if sessions[index][0].duration_minutes == longest
+                    ]
+                if len(candidates) == 1:
+                    proposals[candidates[0]].add(score)
+            except (ValueError, TypeError, KeyError, OverflowError, OSError):
+                # No payload/identifiers in diagnostics, and one malformed
+                # optional report must not discard other reports/sessions.
+                continue
+        for index, scores in proposals.items():
+            session = sessions[index][0]
+            if session.sleep_score is None and len(scores) == 1:
+                session.sleep_score = next(iter(scores))
+                session.sleep_score_source = "daily_report"
+
     async def _discover_region(self, preferred_region: str) -> str:
         candidates = [preferred_region] + [
             region for region in KNOWN_REGIONS if region != preferred_region
@@ -687,6 +835,7 @@ class MiFitnessCloudAdapter(DataAdapter):
             yield
 
         records = await self._fetch_key("sleep", start_date, end_date)
+        sessions: list[tuple[SleepSession, str | None]] = []
         skipped = 0
         for item in records:
             try:
@@ -735,6 +884,7 @@ class MiFitnessCloudAdapter(DataAdapter):
                         continue
 
                 sleep_id = f"{item.get('sid', self.user_id)}_{item.get('time') or sleep_end}"
+                score = self._sleep_score(payload)
                 session = SleepSession(
                     id=f"mi_fitness_sleep_{sleep_id}",
                     provider="mi_fitness",
@@ -750,18 +900,42 @@ class MiFitnessCloudAdapter(DataAdapter):
                     duration_minutes=duration_minutes,
                     time_asleep_minutes=asleep_minutes,
                     time_awake_minutes=awake_minutes,
-                    sleep_score=self._optional_int(
-                        payload.get("score") or payload.get("sleep_score")
-                    ),
-                    is_nap=bool(payload.get("is_nap", False)),
+                    sleep_score=score,
+                    sleep_score_source="sleep_record" if score is not None else None,
+                    is_nap=str(payload.get("is_nap", False)).lower() in {"true", "1", "yes"},
                     stages=stages,
                 )
             except Exception as exc:
                 skipped += 1
                 logger.debug("Skipping malformed sleep record: %s: %s", type(exc).__name__, exc)
                 continue
-            yield session
+            sessions.append((session, self._sleep_source(item.get("sid"))))
         self._log_skipped("sleep", skipped)
+
+        missing = [
+            session for session, _ in sessions
+            if session.sleep_score is None and self._main_sleep_candidate(session)
+        ]
+        if missing:
+            # Use wake dates (not request/start dates), with one day of padding
+            # for account/report timezone differences and cross-midnight chunks.
+            report_start = (min(s.end_at.date() for s in missing) - timedelta(days=1)).isoformat()
+            report_end = (max(s.end_at.date() for s in missing) + timedelta(days=1)).isoformat()
+            try:
+                reports = await self._fetch_daily_sleep_reports(report_start, report_end)
+                self._apply_daily_sleep_scores(sessions, reports)
+            except Exception:
+                # Cancellation (BaseException) still propagates. Report errors
+                # are optional; never expose upstream messages or credentials.
+                logger.warning("sleep: daily score lookup unavailable; retaining sleep sessions")
+            unavailable = sum(session.sleep_score is None for session in missing)
+            if unavailable:
+                logger.warning(
+                    "sleep: %d main session(s) have no unambiguous upstream score; "
+                    "missing scores are not estimated", unavailable,
+                )
+        for session, _ in sessions:
+            yield session
 
     async def iter_workouts(
         self,

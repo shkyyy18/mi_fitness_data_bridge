@@ -212,6 +212,7 @@ class QueryService:
             "time_asleep_minutes": record["time_asleep_minutes"],
             "time_awake_minutes": record["time_awake_minutes"],
             "sleep_score": record.get("sleep_score"),
+            "sleep_score_source": record.get("sleep_score_source"),
             "is_nap": record.get("is_nap", False),
         }
 

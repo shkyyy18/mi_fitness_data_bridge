@@ -93,9 +93,16 @@ class Database:
                     sleep_score INTEGER,
                     is_nap BOOLEAN DEFAULT FALSE,
                     stages TEXT,  -- JSON array of sleep stages
+                    sleep_score_source TEXT,
                     UNIQUE(user_id, sleep_id)
                 )
             """)
+
+            # Additive migration: old caches keep their scores with unknown
+            # provenance until re-sync; never infer their original endpoint.
+            sleep_columns = {row[1] for row in conn.execute("PRAGMA table_info(sleep_sessions)")}
+            if "sleep_score_source" not in sleep_columns:
+                conn.execute("ALTER TABLE sleep_sessions ADD COLUMN sleep_score_source TEXT")
 
             # 运动记录表
             conn.execute("""
@@ -357,15 +364,26 @@ class Database:
                 INSERT INTO sleep_sessions (
                     id, provider, source_type, source_record_id, user_id, device_id,
                     timezone, collected_at, sleep_id, start_at, end_at, duration_minutes,
-                    time_asleep_minutes, time_awake_minutes, sleep_score, is_nap, stages
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    time_asleep_minutes, time_awake_minutes, sleep_score, is_nap, stages, sleep_score_source
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id, sleep_id) DO UPDATE SET
                     start_at = excluded.start_at,
                     end_at = excluded.end_at,
                     duration_minutes = excluded.duration_minutes,
                     time_asleep_minutes = excluded.time_asleep_minutes,
                     time_awake_minutes = excluded.time_awake_minutes,
-                    sleep_score = excluded.sleep_score,
+                    sleep_score = CASE
+                        WHEN excluded.sleep_score IS NOT NULL THEN excluded.sleep_score
+                        WHEN sleep_sessions.start_at = excluded.start_at
+                         AND sleep_sessions.end_at = excluded.end_at
+                         AND sleep_sessions.is_nap = excluded.is_nap
+                        THEN sleep_sessions.sleep_score ELSE NULL END,
+                    sleep_score_source = CASE
+                        WHEN excluded.sleep_score IS NOT NULL THEN excluded.sleep_score_source
+                        WHEN sleep_sessions.start_at = excluded.start_at
+                         AND sleep_sessions.end_at = excluded.end_at
+                         AND sleep_sessions.is_nap = excluded.is_nap
+                        THEN sleep_sessions.sleep_score_source ELSE NULL END,
                     is_nap = excluded.is_nap,
                     stages = excluded.stages,
                     updated_at = CURRENT_TIMESTAMP
@@ -388,6 +406,7 @@ class Database:
                     sleep.sleep_score,
                     sleep.is_nap,
                     json.dumps([s.model_dump() for s in sleep.stages]),
+                    sleep.sleep_score_source,
                 ),
             )
             conn.commit()

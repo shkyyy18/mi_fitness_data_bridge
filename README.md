@@ -120,6 +120,22 @@ mi-fitness-bridge sync --type body_measurements --start-date 2026-07-01 --end-da
 
 `--type` 可选值：`daily_activity`、`heart_rate`、`body_measurements`、`sleep`、`workouts`、`spo2`、`stress`、`abnormal_heart_beat`。CLI 会按数据类型报告新增、更新、部分完成和失败情况。指定明确日期范围的重复同步是幂等的，不会复制已有记录；若小米后来修正了较早日期，请用显式的较早 `--start-date` 重跑该范围。
 
+### 睡眠分为空（Issue #14）
+
+睡眠同步现在优先保留原始记录的有效评分；主睡眠缺少评分时，会尝试从**本人账户的每日聚合睡眠报告**补取。按本地醒来日期、来源及可用的睡眠段起止时间匹配，只给可明确识别的主睡眠补分；不把每日分数复制给小睡或其他设备，不自行估算。
+
+- `sleep_score_source` 标明 `sleep_record`（原始记录）或 `daily_report`（每日报告）；旧缓存的未知来源为 `null`。每日报告分数不是对每段睡眠分别计算的评分。
+- **仍属非官方、实验性兼容。** 本次只经过合成数据和 HTTP mock 验证，不代表已验证某款设备或地区。`KNOWN_REGIONS` 只是路由候选，不是睡眠分兼容名单。
+- 聚合接口不可用、无评分或匹配有歧义时，会提示但保留基础睡眠记录；没有可用历史评分时仍为 `null`。评分为 0 的上游默认值仍按不可用处理，不计为零分。相同起止时间与小睡标记的旧记录会保留最后已知评分，因此它不一定是本次同步的新结果。
+- **更新包含此修复的代码后，先重新同步，再导出，并重启已有 MCP 进程。** 只重跑 export 不会获取新数据。无需删除数据库，初始化时会自动添加来源列。
+
+```bash
+mi-fitness-bridge sync --type sleep --start-date 2026-09-13 --end-date 2026-09-21
+mi-fitness-bridge export --format json --type sleep --start-date 2026-09-13 --end-date 2026-09-21 --output exports/sleep.json
+```
+
+以上为日期范围示例；跨午夜的睡眠可把范围前后各放宽一天。查询汇总按本地醒来日期，导出仍按原有 `start_at` 筛选，详见 [导出格式](docs/export-format.md)。如仍为空，仅反馈设备型号、账户地区、安装版本、App 是否有评分及同步状态；不要上传凭证、真实健康数据、数据库或日志。
+
 ## 导出本地数据
 
 导出一个 JSON 文件：

@@ -52,7 +52,8 @@ const SAMPLE = {
           "time_awake_minutes": 24,
           "sleep_score": 86,
           "is_nap": 0,
-          "stages": "[{\"stage\": \"deep\", \"minutes\": 82}, {\"stage\": \"light\", \"minutes\": 271}, {\"stage\": \"rem\", \"minutes\": 88}, {\"stage\": \"awake\", \"minutes\": 24}]"
+          "stages": "[{\"stage\": \"deep\", \"minutes\": 82}, {\"stage\": \"light\", \"minutes\": 271}, {\"stage\": \"rem\", \"minutes\": 88}, {\"stage\": \"awake\", \"minutes\": 24}]",
+          "sleep_score_source": null
         }
       ],
       "workouts": [
@@ -113,7 +114,7 @@ const SAMPLE = {
   },
   "csv": {
     "daily_activity.csv": "﻿id,provider,source_type,source_record_id,user_id,device_id,timezone,collected_at,created_at,updated_at,date,steps,distance_m,active_kcal,total_kcal,floors,active_minutes\r\ndemo-activity-1,mi_fitness,cloud_session,,synthetic-demo-user,,UTC,,2026-07-15 20:00:00,2026-07-15 20:00:00,2026-07-15,8432,6120.5,312.0,2210.0,6,54\r\n",
-    "sleep.csv": "﻿id,provider,source_type,source_record_id,user_id,device_id,timezone,collected_at,created_at,updated_at,sleep_id,start_at,end_at,duration_minutes,time_asleep_minutes,time_awake_minutes,sleep_score,is_nap,stages\r\ndemo-sleep-1,mi_fitness,cloud_session,,synthetic-demo-user,,UTC,,2026-07-15 20:00:00,2026-07-15 20:00:00,demo-sleep-1,2026-07-14T23:20:00,2026-07-15T07:05:00,465,441,24,86,0,\"[{\"\"stage\"\": \"\"deep\"\", \"\"minutes\"\": 82}, {\"\"stage\"\": \"\"light\"\", \"\"minutes\"\": 271}, {\"\"stage\"\": \"\"rem\"\", \"\"minutes\"\": 88}, {\"\"stage\"\": \"\"awake\"\", \"\"minutes\"\": 24}]\"\r\n",
+    "sleep.csv": "﻿id,provider,source_type,source_record_id,user_id,device_id,timezone,collected_at,created_at,updated_at,sleep_id,start_at,end_at,duration_minutes,time_asleep_minutes,time_awake_minutes,sleep_score,is_nap,stages,sleep_score_source\r\ndemo-sleep-1,mi_fitness,cloud_session,,synthetic-demo-user,,UTC,,2026-07-15 20:00:00,2026-07-15 20:00:00,demo-sleep-1,2026-07-14T23:20:00,2026-07-15T07:05:00,465,441,24,86,0,\"[{\"\"stage\"\": \"\"deep\"\", \"\"minutes\"\": 82}, {\"\"stage\"\": \"\"light\"\", \"\"minutes\"\": 271}, {\"\"stage\"\": \"\"rem\"\", \"\"minutes\"\": 88}, {\"\"stage\"\": \"\"awake\"\", \"\"minutes\"\": 24}]\",\r\n",
     "workouts.csv": "﻿id,provider,source_type,source_record_id,user_id,device_id,timezone,collected_at,created_at,updated_at,workout_id,activity_type,start_at,end_at,duration_minutes,distance_m,calories_kcal,avg_heart_rate_bpm,max_heart_rate_bpm,avg_pace_sec_per_km,max_pace_sec_per_km,total_steps\r\ndemo-workout-1,mi_fitness,cloud_session,,synthetic-demo-user,,UTC,,2026-07-15 20:00:00,2026-07-15 20:00:00,demo-workout-1,running,2026-07-15T18:30:00,2026-07-15T19:12:00,42,7200.0,480.0,148,171,,,\r\n",
     "body_measurements.csv": "﻿id,provider,source_type,source_record_id,user_id,device_id,timezone,collected_at,created_at,updated_at,timestamp,weight_kg,bmi,body_fat_pct,muscle_mass_kg,water_pct,bone_mass_kg,visceral_fat_score,basal_metabolism_kcal,metabolic_age\r\ndemo-body-1,mi_fitness,cloud_session,,synthetic-demo-user,,UTC,,2026-07-15 20:00:00,2026-07-15 20:00:00,2026-07-15T07:20:00,72.4,23.1,18.7,55.3,56.2,,8,1650,\r\n",
     "heart_rate.csv": "﻿id,provider,source_type,source_record_id,user_id,device_id,timezone,collected_at,created_at,updated_at,timestamp,bpm,sample_type\r\n",

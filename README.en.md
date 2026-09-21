@@ -120,6 +120,22 @@ mi-fitness-bridge sync --type body_measurements --start-date 2026-07-01 --end-da
 
 `--type` accepts: `daily_activity`, `heart_rate`, `body_measurements`, `sleep`, `workouts`, `spo2`, `stress`, and `abnormal_heart_beat`. The CLI reports added, updated, partial, and failed results by data type. Re-running an explicit date range is idempotent and does not duplicate stored records. If Xiaomi later corrects earlier history, re-run that earlier range with an explicit `--start-date`.
 
+### Missing sleep scores (issue #14)
+
+Sleep sync now prefers valid scores on raw records. If main sleep has no score, it also tries **this account's daily aggregate sleep reports**. Matching uses local wake date, source and segment boundaries when available. Only an unambiguous main sleep receives the daily score; it is never copied to naps/other devices or locally estimated.
+
+- `sleep_score_source` is `sleep_record` or `daily_report`; unknown provenance in older caches is `null`. A daily score is not a separate score calculated for each sleep segment.
+- **Still unofficial and experimental.** This change is covered by synthetic data and HTTP mocks, not live device/region verification. `KNOWN_REGIONS` lists routing candidates, not verified sleep-score support.
+- Unavailable reports, missing scores or ambiguous matches emit a warning without discarding base sleep records. Without a previously available score the value remains `null`. Upstream zero defaults still mean unavailable, not a zero score. Re-sync preserves the last known score for exactly the same boundaries and nap flag, so it may not be fresh from the current sync.
+- **After installing code containing this fix, re-sync before exporting and restart existing MCP processes.** Export alone cannot fetch scores. Do not delete the database; initialization adds the provenance column automatically.
+
+```bash
+mi-fitness-bridge sync --type sleep --start-date 2026-09-13 --end-date 2026-09-21
+mi-fitness-bridge export --format json --type sleep --start-date 2026-09-13 --end-date 2026-09-21 --output exports/sleep.json
+```
+
+These are example dates; allow an extra day on each side for cross-midnight sleep. Summaries use local wake dates while exports retain their existing `start_at` filtering; see [export format](docs/export-format.md). If still empty, share only model, account region, installed version, whether the app shows a score, and sync status. Never upload credentials, real health records, databases or logs.
+
 ## Export local data
 
 Export one portable JSON file:

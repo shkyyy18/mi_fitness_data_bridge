@@ -81,3 +81,13 @@ Filtering is inclusive:
 - `--end-date 2026-07-15` includes rows whose dataset date column is on or before `2026-07-15`.
 
 For timestamp-based datasets, the exporter applies SQLite `date(<column>)` before comparing, so a value such as `2026-07-15T23:30:00` is included by `--end-date 2026-07-15`.
+
+## Sleep score availability and provenance
+
+`sleep_score` is optional. Raw sleep scores are preferred; an unambiguous main sleep can be enriched with the upstream daily-report score. No scores are locally estimated, and a daily score is not independently calculated for each session. Missing, invalid and zero-default upstream values are unavailable (JSON `null`, CSV empty), not zero measurements.
+
+The additive `sleep_score_source` column is `sleep_record`, `daily_report`, or null for unknown/absent provenance. Database initialization adds the column to older caches without deleting records. A direct offline export of an old, not-yet-initialized cache retains its old columns. The envelope schema remains 1.0; consumers should tolerate additive columns.
+
+A failed/missing optional lookup does not erase a previously known score for unchanged start/end timestamps and nap flag. Such a score is last-known, not proof of a fresh upstream value. A later valid score replaces it, and changed boundaries/nap flags cannot inherit it.
+
+Export reads only the cache. After updating the connector, explicitly re-sync affected sleep dates, then export. For overnight sleep consider widening the date range by a day: MCP main-sleep summaries use local wake date, but export still uses the existing SQLite `date(start_at)` filter (timezone offsets are normalized by SQLite). Restart an existing MCP server after updating its installed package.

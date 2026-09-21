@@ -16,6 +16,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Address missing sleep scores (#14) with a best-effort own-account daily aggregate report lookup when raw main-sleep records have no valid score. Match local wake date/source and reported segment boundaries conservatively; do not score naps, ambiguous devices, mismatched segments or conflicting reports. Keep raw scores authoritative, isolate invalid optional scores, and preserve base sleep records if the optional lookup fails. The endpoint remains experimental; encrypted HTTP mocks are not live-account verification.
+- Add nullable `sleep_score_source` (`sleep_record` / `daily_report`) to sleep models, cache, MCP and exports with an additive cache migration. Preserve last known scores on re-sync only for unchanged session boundaries and nap flags; never carry them to changed sessions. Existing unknown provenance remains null. Re-sync affected dates after updating; export alone does not fetch scores.
+
 - Daily-activity deduplication now groups parallel device records by local minute even when their seconds differ, retaining one coherent largest record instead of summing duplicates (fixes #12).
 
 - Reject malformed login JSON, invalid field types/redirects and missing session cookies with credential-safe errors; validate responses before changing adapter/keyring state.

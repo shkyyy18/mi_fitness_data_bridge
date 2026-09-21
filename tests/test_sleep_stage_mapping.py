@@ -20,6 +20,11 @@ def _adapter() -> MiFitnessCloudAdapter:
     adapter = MiFitnessCloudAdapter(user_id="1", pass_token="tok")
     adapter._connected = True
     adapter._client = object()
+
+    async def reports(start_date, end_date):
+        return []
+
+    adapter._fetch_daily_sleep_reports = reports
     return adapter
 
 
