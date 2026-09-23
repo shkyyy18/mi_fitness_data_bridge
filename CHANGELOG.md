@@ -1,7 +1,10 @@
 # Changelog
 
+All notable changes to this project will be documented in this file.
 
-## Unreleased
+## [Unreleased]
+
+## [0.3.2] - 2026-09-23
 
 - Document all 15 MCP tools with purpose, alternatives, local/cloud effects, response shapes, units, parameter defaults and constraints; publish server guidance and explicit tool safety annotations without renaming existing tools.
 - Reject invalid calendar dates and reversed ranges before dispatch, and add schema constraints for date/range selection, dataset enums, positive sample limits and workout-series bounds.
@@ -15,10 +18,6 @@
 - Add an account-free bilingual static demo built only from the synthetic SQLite/JSON/CSV export fixture, plus compatibility limitations and a privacy-safe feedback form.
 - Close read-only SQLite export connections explicitly to avoid leaked file handles, including Windows temporary-file cleanup failures.
 - Add regression tests for synthetic web samples and export connection cleanup.
-
-All notable changes to this project will be documented in this file.
-
-## [Unreleased]
 
 ### Fixed
 

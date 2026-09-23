@@ -2,7 +2,7 @@
 
 ## Local validation
 
-- [ ] Version strings match across `pyproject.toml`, `src/mi_fitness_mcp/__init__.py`, and `server.json`.
+- [x] Version strings match across `pyproject.toml`, `src/mi_fitness_mcp/__init__.py`, and `server.json`.
 - [x] Tests and Ruff pass on supported Python versions.
 - [x] Python syntax checks and `git diff --check` pass.
 - [x] Wheel builds and installs in an isolated target.
@@ -44,3 +44,5 @@
 - 2026-08-13: v0.3.0 released — 38 tests and Ruff green locally, `main` + annotated `v0.3.0` tag pushed, GitHub Release notes published from `CHANGELOG.md`, main-branch CI green.
 - 2026-08-13: real-account pilot passed 6/6 gates — `doctor` OK (region cn, 8 dataset types), bounded 7-day sync (2026-08-07..13) succeeded for daily activity (7 rows), sleep (8 rows), and heart rate (2032 rows); JSON/CSV exports matched sync counts with zero credential-field matches; re-sync was idempotent (no duplicate rows). Evidence recorded with redacted counts only.
 - Still open: vulnerability reporting, branch rules, and post-release adoption evidence.
+
+- 2026-09-23: v0.3.2 release candidate — 260 tests, Ruff, Python syntax compilation, `git diff --check`, and sdist/wheel build passed on Python 3.12. Sleep-score daily-report supplementation remains unverified against the Issue reporter's account/device/region; the release notes and Issue response must preserve that caveat.
