@@ -94,6 +94,13 @@ class SyncService:
         if not self.adapter.is_connected():
             raise RuntimeError("Adapter not connected")
 
+        if data_type == "workout_detail":
+            # 明细不走日期水位/分块：默认扫描全部 workouts 缓存，只拉缺
+            # 明细的运动（已有明细的零请求跳过）；显式日期则按范围过滤。
+            # 若走水位恢复，首次明细同步之后的日期范围会把更早的运动
+            # 永久排除在默认同步之外，无法自动回填。
+            return await self._sync_workout_detail_range(start_date, end_date, force_full)
+
         # 获取上次同步状态，用于增量同步
         last_record_ts = None
         if not force_full:
@@ -114,6 +121,10 @@ class SyncService:
                 if last_record_ts
                 else end_dt - timedelta(days=self.default_lookback_days - 1)
             )
+            # 水印是时间戳：当日已有数据时它会落在今天日内，晚于按午夜
+            # 计算的 end_dt。钳制到 end_dt，否则当天重跑默认同步必报
+            # "start_date must not be after end_date"。
+            start_dt = min(start_dt, end_dt)
             start_date = start_dt.strftime("%Y-%m-%d")
         if start_dt > end_dt:
             raise ValueError("start_date must not be after end_date")
@@ -141,7 +152,9 @@ class SyncService:
                     }
                 )
                 return {
-                    "status": "partial" if any(c.get("status") == "ok" for c in chunks) else "error",
+                    "status": "partial"
+                    if any(c.get("status") == "ok" for c in chunks)
+                    else "error",
                     "data_type": data_type,
                     **totals,
                     "start_date": start_date,
@@ -197,6 +210,93 @@ class SyncService:
 
     # 每个 range 最多带回的坏记录条数，避免异常结果无限膨胀。
     _MAX_BAD_RECORDS = 20
+
+    async def _sync_workout_detail_range(
+        self, start_date: str, end_date: str, force_full: bool = False
+    ) -> dict:
+        """按 workouts 缓存逐次拉取 FDS 明细（秒级样本 + GPS 轨迹）。
+
+        与 _SYNC_TARGETS 不同：数据源不是日期范围拉取，而是本地 workouts 表
+        中已带 FDS 元数据的记录，逐次下载、幂等 upsert。默认跳过已入库明细
+        的运动（默认全量同步才会纳入本类型，增量代价≈0）；force_full 重拉。
+        """
+        user_id = getattr(self.adapter, "get_user_id", lambda: None)() or "unknown"
+        workouts = self.db.query_workouts(user_id, start_date, end_date)
+
+        added = 0
+        updated = 0
+        skipped = 0
+        attempted = 0
+        bad_records: list[dict] = []
+        for workout in workouts:
+            workout_id = workout.get("workout_id")
+            if not (workout.get("fds_sid") and workout.get("report_time")):
+                skipped += 1  # FDS 元数据缺失的旧记录
+                continue
+            if not force_full:
+                sample_count, gps_count = self.db.workout_detail_counts(user_id, str(workout_id))
+                if sample_count or gps_count:
+                    logger.debug("Workout detail for %s already cached, skipping", workout_id)
+                    skipped += 1
+                    continue
+            attempted += 1
+            try:
+                samples, gps_points = await self.adapter.fetch_workout_detail(workout)
+            except NotImplementedError:
+                raise RuntimeError("Adapter does not support workout detail download") from None
+            except Exception as exc:
+                skipped += 1
+                if len(bad_records) < self._MAX_BAD_RECORDS:
+                    bad_records.append(
+                        {
+                            "data_type": "workout_detail",
+                            "record_id": str(workout_id or "unknown"),
+                            "error_type": type(exc).__name__,
+                            "error": str(exc)[:200],
+                        }
+                    )
+                logger.warning(
+                    "Workout detail failed for %s: %s: %s",
+                    workout_id,
+                    type(exc).__name__,
+                    exc,
+                )
+                continue
+            sample_added, sample_updated = self.db.insert_workout_detail_samples(samples)
+            gps_added, gps_updated = self.db.insert_workout_gps_points(gps_points)
+            added += sample_added + gps_added
+            updated += sample_updated + gps_updated
+            logger.info(
+                "Workout detail %s: %d samples (%d new), %d gps points (%d new)",
+                workout.get("workout_id"),
+                len(samples),
+                sample_added,
+                len(gps_points),
+                gps_added,
+            )
+
+        # 明细的覆盖判定靠逐运动存在性检查（不走水位），这里只记录
+        # last_sync_at 供连接状态展示。
+        try:
+            self.db.update_sync_state("workout_detail")
+        except Exception:
+            logger.debug("Failed to record workout_detail sync state", exc_info=True)
+
+        # 全部尝试失败时报 partial，避免 CLI/agent 把失败读成成功
+        # （与分块路径的 partial 语义对齐；个别失败仍属 ok，见 bad_records）。
+        status = (
+            "partial" if attempted > 0 and bad_records and added == 0 and updated == 0 else "ok"
+        )
+        return {
+            "status": status,
+            "data_type": "workout_detail",
+            "added": added,
+            "updated": updated,
+            "skipped": skipped,
+            "bad_records": bad_records,
+            "start_date": start_date,
+            "end_date": end_date,
+        }
 
     async def _sync_range(self, data_type: str, start_date: str, end_date: str) -> dict:
         target = self._SYNC_TARGETS.get(data_type)

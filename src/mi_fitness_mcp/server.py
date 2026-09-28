@@ -34,7 +34,7 @@ app = Server(
         "data automatically. Outputs are JSON text; inspect status/error and data_quality, "
         "and never interpret missing records as normal health or zero measurements. "
         "Dates are inclusive YYYY-MM-DD; prefer narrow ranges and small sample limits. "
-        "Use query_workouts then workout_series for an activity curve, query_metric_series for "
+        "Use query_workouts then workout_detail_series for the per-second activity curve (requires workout_detail sync) or workout_series for the coarse cached-sample curve, query_metric_series for "
         "daily activity/weight trends, and the specific query tools for raw samples. "
         "This is data access infrastructure, not medical advice."
     ),
@@ -112,14 +112,18 @@ async def list_tools() -> list[Tool]:
                                 "body_measurements",
                                 "sleep",
                                 "workouts",
+                                "workout_detail",
                                 "spo2",
                                 "stress",
                                 "abnormal_heart_beat",
                             ],
                         },
                         "description": "Dataset names; omitted selects all "
-                        "adapter-supported datasets; [] is "
-                        "invalid.",
+                        "adapter-supported datasets including "
+                        "workout_detail, which downloads per-workout "
+                        "FDS blobs (per-second samples and GPS) for "
+                        "cached workouts missing detail and skips "
+                        "workouts already covered; [] is invalid.",
                         "minItems": 1,
                     },
                     "start_date": {
@@ -546,7 +550,8 @@ async def list_tools() -> list[Tool]:
                 "List recorded workouts starting within an inclusive YYYY-MM-DD range. Returns "
                 "data.workouts, count and data_quality; rows include workout_id, activity_type, "
                 "start_at/end_at, duration_minutes, distance_m, calories_kcal and available "
-                "heart-rate/pace fields (missing fields may be null). activity_types matches "
+                "heart-rate/pace/cadence/altitude/training-metric fields (missing fields may be "
+                "null, depending on device and upstream data). activity_types matches "
                 "case-insensitively; min_duration is minutes and min_distance_km is kilometers "
                 "(unlike output distance_m). Filters combine with AND. No pagination; narrow dates. "
                 "Use a returned workout_id with workout_series for a heart-rate curve; this tool "
@@ -671,6 +676,81 @@ async def list_tools() -> list[Tool]:
                         "zone normalization; use the same "
                         "value across compared workouts. "
                         "Omit to use this workout maximum.",
+                        "minimum": 1,
+                    },
+                },
+                "required": ["workout_id"],
+                "additionalProperties": False,
+            },
+            annotations={
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False,
+            },
+        ),
+        Tool(
+            name="workout_detail_series",
+            description=(
+                "Read an agent-safe per-second detail series (heart rate, cadence, pace or speed) "
+                "for one workout_id obtained from query_workouts (contract agent-safe-series/v1). "
+                "Data comes from the FDS detail cache (workout_detail_samples), populated by "
+                "syncing workout_detail; workouts without synced detail return an empty series, "
+                "not an error. Sensor zero values at activity start are excluded as missing and "
+                "counted in data_quality. Points carry numeric t offsets in seconds from start; "
+                "stats and time_in_zone are computed on full-resolution samples; downsampling is "
+                "always disclosed (default 400 points, hard cap 500). time_in_zone is only "
+                "produced for heart_rate. Read-only local SQLite query; no cloud request or "
+                "automatic sync. Returns JSON text with status, source=cache, generated_at and "
+                "data; use get_data_coverage with data_types=[\"workout_detail\"] to check "
+                "availability."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workout_id": {
+                        "type": "string",
+                        "description": "Exact workout_id returned by "
+                        "query_workouts for this account; do not "
+                        "invent an ID.",
+                        "minLength": 1,
+                    },
+                    "metric": {
+                        "type": "string",
+                        "enum": ["heart_rate", "cadence", "pace", "speed"],
+                        "default": "heart_rate",
+                        "description": "heart_rate in bpm, cadence in spm, "
+                        "pace in s/km, speed in m/s; channel "
+                        "availability depends on the sport's "
+                        "record blob, missing channels yield "
+                        "empty series.",
+                    },
+                    "resolution": {
+                        "type": "integer",
+                        "default": 60,
+                        "description": "Requested bucket duration in seconds "
+                        "(default 60, at least 1); automatically "
+                        "increased to fit max_points.",
+                        "minimum": 1,
+                    },
+                    "max_points": {
+                        "type": "integer",
+                        "default": 400,
+                        "maximum": 500,
+                        "description": "Requested maximum returned points "
+                        "(default 400, 1..500); server also "
+                        "clamps direct service calls to this "
+                        "range.",
+                        "minimum": 1,
+                    },
+                    "reference_max_hr": {
+                        "type": "integer",
+                        "description": "Optional positive reference maximum "
+                        "heart rate in bpm for zone "
+                        "normalization; use the same value "
+                        "across compared workouts. Omit to "
+                        "use this workout maximum. Only "
+                        "affects heart_rate.",
                         "minimum": 1,
                     },
                 },
@@ -882,6 +962,8 @@ async def list_tools() -> list[Tool]:
                                 "body_measurements",
                                 "sleep",
                                 "workouts",
+                                "workout_detail",
+                                "workout_gps",
                                 "spo2",
                                 "stress",
                                 "abnormal_heart_beat",
@@ -952,6 +1034,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             result = await _handle_query_workouts(arguments)
         elif name == "workout_series":
             result = await _handle_workout_series(arguments)
+        elif name == "workout_detail_series":
+            result = await _handle_workout_detail_series(arguments)
         elif name == "query_spo2":
             result = await _handle_query_spo2(arguments)
         elif name == "query_stress":
@@ -1299,6 +1383,22 @@ async def _handle_workout_series(arguments: dict) -> dict:
         return {"status": "error", "error": "Query service not initialized"}
     try:
         series = query_service.get_workout_series(
+            workout_id=arguments["workout_id"],
+            metric=arguments.get("metric", "heart_rate"),
+            resolution=arguments.get("resolution", 60),
+            max_points=arguments.get("max_points", 400),
+            reference_max_hr=arguments.get("reference_max_hr"),
+        )
+    except ValueError as exc:
+        return {"status": "error", "error": str(exc)}
+    return QueryResponse(status="ok", source="cache", data=series).model_dump()
+
+
+async def _handle_workout_detail_series(arguments: dict) -> dict:
+    if not query_service:
+        return {"status": "error", "error": "Query service not initialized"}
+    try:
+        series = query_service.get_workout_detail_series(
             workout_id=arguments["workout_id"],
             metric=arguments.get("metric", "heart_rate"),
             resolution=arguments.get("resolution", 60),

@@ -41,7 +41,7 @@ def test_sync_service_chunks_requested_range_and_aggregates_counts():
     service = SyncService(ConnectedAdapter(), FakeDatabase(), chunk_days=3)
     calls: list[tuple[str, str, str]] = []
 
-    async def fake_sync_range(data_type, start_date, end_date):
+    async def fake_sync_range(data_type, start_date, end_date, force_full=False):
         calls.append((data_type, start_date, end_date))
         return {"added": 1, "updated": 2, "skipped": 3}
 
@@ -70,7 +70,7 @@ def test_sync_service_returns_partial_result_and_releases_lock_after_chunk_failu
     service = SyncService(ConnectedAdapter(), FakeDatabase(), chunk_days=2)
     calls = 0
 
-    async def fake_sync_range(data_type, start_date, end_date):
+    async def fake_sync_range(data_type, start_date, end_date, force_full=False):
         nonlocal calls
         calls += 1
         if calls == 2:
@@ -172,12 +172,40 @@ def test_sync_data_type_surfaces_bad_records_in_chunks():
     service = SyncService(RangeAdapter(), db, chunk_days=7)
 
     result = asyncio.run(
-        service.sync_data_type(
-            "daily_activity", start_date="2026-07-01", end_date="2026-07-03"
-        )
+        service.sync_data_type("daily_activity", start_date="2026-07-01", end_date="2026-07-03")
     )
 
     assert result["status"] == "ok"
     assert result["added"] == 2
     assert result["skipped"] == 1
     assert result["chunks"][0]["bad_records"][0]["record_id"] == "bad-1"
+
+
+def test_default_sync_clamps_same_day_watermark_to_end_date():
+    """当日已有数据的类型，默认同步（无日期参数）不得因水印晚于 end_dt 报错。
+
+    水印是日内时间戳（如 16:34），end_date 按午夜计算；旧行为会抛出
+    "start_date must not be after end_date"，导致当天重跑同步必然失败。
+    """
+    from datetime import datetime
+
+    watermark = datetime.now().replace(microsecond=0)  # 今天日内
+    db = FakeDatabase(state={"last_record_timestamp": watermark.isoformat()})
+    service = SyncService(ConnectedAdapter(), db, chunk_days=7)
+    calls: list[tuple[str, str, str]] = []
+
+    async def fake_sync_range(data_type, start_date, end_date, force_full=False):
+        calls.append((data_type, start_date, end_date))
+        return {"added": 0, "updated": 0, "skipped": 0}
+
+    service._sync_range = fake_sync_range
+    result = asyncio.run(service.sync_data_type("daily_activity"))
+
+    assert result["status"] == "ok"
+    assert calls, "default sync must request at least one range"
+    start = datetime.strptime(calls[0][1], "%Y-%m-%d")
+    end = datetime.strptime(calls[0][2], "%Y-%m-%d")
+    assert start <= end
+    # 钳制后从今天 00:00 起重同步当天（幂等 upsert，不丢数据）。
+    assert start == end
+    assert start.date() == watermark.date()

@@ -114,3 +114,13 @@ class DataAdapter(ABC):
     def get_available_data_types(self) -> list[str]:
         """Get list of available data types."""
         pass
+
+    async def fetch_workout_detail(self, workout: dict) -> tuple[list, list]:
+        """Optional capability: download FDS per-second samples and GPS points.
+
+        ``workout`` is one row of the workouts table. Returns
+        ``(samples, gps_points)``; both empty when the adapter lacks the
+        capability or the workout has no detail blob. See
+        docs/workout-detail-feasibility.md.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support workout detail download")

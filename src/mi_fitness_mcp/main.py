@@ -293,6 +293,7 @@ def main():
             "heart_rate",
             "sleep",
             "workouts",
+            "workout_detail",
             "spo2",
             "stress",
             "abnormal_heart_beat",

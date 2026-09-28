@@ -16,17 +16,37 @@ from urllib.parse import urlencode, urlparse
 import httpx
 
 from mi_fitness_mcp.adapters.base import DataAdapter
+from mi_fitness_mcp.adapters.fds import (
+    FDS_FILE_TYPE_GPS_TRACK,
+    FDS_FILE_TYPE_SPORT_RECORD,
+    SUPPORTED_RECORD_PROTO_TYPES,
+    TYPE_CADENCE,
+    TYPE_CALORIES,
+    TYPE_DISTANCE,
+    TYPE_HEIGHT_VALUE,
+    TYPE_HR,
+    TYPE_PACE,
+    TYPE_SPEED,
+    FdsParseError,
+    build_fds_suffix,
+    decrypt_fds_blob,
+    fds_server_key,
+    parse_gps_record,
+    parse_sport_record,
+)
 from mi_fitness_mcp.auth import save_mi_fitness_token
 from mi_fitness_mcp.models import (
     AbnormalHeartBeatEvent,
     BodyMeasurement,
     DailyActivity,
+    GpsPoint,
     HeartRateSample,
     SleepSession,
     SleepStage,
     SpO2Sample,
     StressSample,
     Workout,
+    WorkoutSample,
 )
 
 LOGIN_PREFIX = b"&&&START&&&"
@@ -283,17 +303,25 @@ class MiFitnessCloudAdapter(DataAdapter):
             raise MiFitnessAuthenticationError("Xiaomi login response is missing serviceToken cookie")
         self._cookies = "; ".join(cookie_parts)
 
-    async def _request(self, base_url: str, api_path: str, payload: dict) -> dict:
+    async def _request(
+        self, base_url: str, api_path: str, payload: dict, sign_path: str | None = None
+    ) -> dict:
+        """POST 一个 RC4 签名的云端请求并解密响应。
+
+        sign_path 覆盖参与签名的路径：FDS 端点（/healthapp/service/...）
+        按 @Secret(pathPrefix="healthapp/") 约定剥离前缀后签名。
+        """
         if not self._client:
             raise RuntimeError("client not initialized")
 
+        signature_path = sign_path or api_path
         last_error: Exception | None = None
         for attempt in range(self.request_retries):
             try:
                 form = {"data": json.dumps(payload, separators=(",", ":"))}
                 nonce = _gen_nonce()
                 signed_nonce = _gen_signed_nonce(self._ssecurity, nonce)
-                form["rc4_hash__"] = _gen_signature("POST", api_path, form, signed_nonce)
+                form["rc4_hash__"] = _gen_signature("POST", signature_path, form, signed_nonce)
 
                 encrypted: dict[str, str] = {}
                 for key, value in form.items():
@@ -301,7 +329,9 @@ class MiFitnessCloudAdapter(DataAdapter):
                         _rc4_crypt(signed_nonce, value.encode())
                     ).decode()
 
-                encrypted["signature"] = _gen_signature("POST", api_path, encrypted, signed_nonce)
+                encrypted["signature"] = _gen_signature(
+                    "POST", signature_path, encrypted, signed_nonce
+                )
                 encrypted["_nonce"] = base64.b64encode(nonce).decode()
 
                 response = await self._client.post(
@@ -574,6 +604,9 @@ class MiFitnessCloudAdapter(DataAdapter):
             "body_measurements",
             "sleep",
             "workouts",
+            # 明细依赖 workouts 先行落库 FDS 元数据，故排在其后；
+            # 已有明细的运动会被 SyncService 跳过，默认全量同步代价极小。
+            "workout_detail",
             "spo2",
             "stress",
             "abnormal_heart_beat",
@@ -694,6 +727,14 @@ class MiFitnessCloudAdapter(DataAdapter):
             return None
         parsed = int(float(value))
         return None if parsed == 0 else parsed
+
+    def _strict_float(self, value: Any) -> float | None:
+        """缺失/None 才返回 None；0 是合法测量值，保留。"""
+        return None if value is None else float(value)
+
+    def _strict_int(self, value: Any) -> int | None:
+        """缺失/None 才返回 None；0 是合法测量值，保留。"""
+        return None if value is None else int(float(value))
 
     async def iter_daily_activity(
         self,
@@ -1002,6 +1043,41 @@ class MiFitnessCloudAdapter(DataAdapter):
                     total_steps=self._optional_int(
                         payload.get("steps") or payload.get("total_steps")
                     ),
+                    # 运动报告补充汇总 + FDS 定位元数据（明细 blob 尚未拉取，
+                    # 这些字段来自既有 get_sport_records_by_time 响应的 value）。
+                    # 用严格解析：海拔 0 / 无氧训练效果 0 / version 0 都是合法值。
+                    min_heart_rate_bpm=self._strict_int(payload.get("min_hrm")),
+                    valid_duration_seconds=self._strict_int(payload.get("valid_duration")),
+                    avg_cadence=self._strict_int(payload.get("avg_cadence")),
+                    max_cadence=self._strict_int(payload.get("max_cadence")),
+                    avg_stride=self._strict_int(payload.get("avg_stride")),
+                    avg_speed_mps=self._strict_float(payload.get("avg_speed")),
+                    min_pace_sec_per_km=self._strict_float(payload.get("min_pace")),
+                    avg_height_m=self._strict_float(payload.get("avg_height")),
+                    max_height_m=self._strict_float(payload.get("max_height")),
+                    min_height_m=self._strict_float(payload.get("min_height")),
+                    rise_height_m=self._strict_float(payload.get("rise_height")),
+                    fall_height_m=self._strict_float(payload.get("fall_height")),
+                    total_climbing_m=self._strict_float(payload.get("total_climbing")),
+                    vo2max=self._strict_int(payload.get("vo2max")),
+                    train_effect=self._strict_float(payload.get("train_effect")),
+                    anaerobic_train_effect=self._strict_float(
+                        payload.get("anaerobic_train_effect")
+                    ),
+                    training_load=self._strict_int(payload.get("training_load")),
+                    recovery_time=self._strict_int(payload.get("recovery_time")),
+                    avg_spo2_pct=self._strict_int(payload.get("avg_spo2")),
+                    fds_sid=str(item["sid"]) if item.get("sid") is not None else None,
+                    # FDS 数据 ID 必须用 proto_type（非 sport_type）与报告级 time；
+                    # 见 docs/workout-detail-feasibility.md。
+                    proto_type=self._strict_int(payload.get("proto_type")),
+                    report_version=self._strict_int(payload.get("version")),
+                    report_time=self._strict_int(
+                        payload.get("time") or payload.get("timestamp")
+                    ),
+                    tz_in_15min=self._strict_int(
+                        payload.get("timezone") or payload.get("time_zone")
+                    ),
                 )
             except Exception as exc:
                 skipped += 1
@@ -1009,6 +1085,171 @@ class MiFitnessCloudAdapter(DataAdapter):
                 continue
             yield workout
         self._log_skipped("workouts", skipped)
+
+    async def fetch_workout_detail(
+        self, workout: dict
+    ) -> tuple[list[WorkoutSample], list[GpsPoint]]:
+        """下载并解析单次运动的 FDS 明细：秒级样本（fileType=0）与 GPS 轨迹（fileType=2）。
+
+        workout 为 workouts 表的一行（dict），需含 Phase 1 元数据：
+        fds_sid / proto_type / report_version / report_time / tz_in_15min /
+        workout_id / start_at。version<=0、proto_type 未支持或元数据缺失
+        时返回空，不发起请求。
+        """
+        fds_sid = workout.get("fds_sid")
+        proto_type = workout.get("proto_type")
+        report_time = workout.get("report_time")
+        tz_in_15min = workout.get("tz_in_15min")
+        workout_id = workout.get("workout_id")
+        if not (fds_sid and workout_id and proto_type is not None and report_time):
+            return [], []
+        if proto_type not in SUPPORTED_RECORD_PROTO_TYPES:
+            logger.info(
+                "Workout detail unsupported proto_type=%s for %s", proto_type, workout_id
+            )
+            return [], []
+        if not workout.get("report_version"):
+            # 上游行为：version<=0 的记录没有明细 blob，不发起请求。
+            return [], []
+        start_at = self._parse_workout_time(workout.get("start_at"))
+        if start_at is None:
+            return [], []
+
+        # tz_in_15min 为 15 分钟步进偏移；FDS key 取低 8 位。
+        tz_byte = int(tz_in_15min or 0) & 0xFF
+        suffixes: dict[int, str] = {}
+        items = []
+        for file_type in (FDS_FILE_TYPE_SPORT_RECORD, FDS_FILE_TYPE_GPS_TRACK):
+            suffix = build_fds_suffix(
+                sid=str(fds_sid),
+                timestamp=int(report_time),
+                tz_in_15min=tz_byte,
+                proto_type=int(proto_type),
+                file_type=file_type,
+            )
+            suffixes[file_type] = suffix
+            items.append({"timestamp": int(report_time), "suffix": suffix})
+
+        result = await self._request(
+            self._health_base_url(),
+            "/healthapp/service/gen_download_url",
+            {"did": str(fds_sid), "items": items},
+            sign_path="/service/gen_download_url",
+        )
+
+        user_resolved = self.user_id or "unknown"
+        base_fields = {
+            "provider": "mi_fitness",
+            "source_type": "cloud_session",
+            "source_record_id": str(report_time),
+            "user_id": user_resolved,
+            # 明细样本统一存 UTC（_timestamp_to_datetime 默认偏移 0），
+            # 与 workout 行的本地时区标记无关。
+            "timezone": "UTC",
+        }
+        samples: list[WorkoutSample] = []
+        gps_points: list[GpsPoint] = []
+        for file_type in (FDS_FILE_TYPE_SPORT_RECORD, FDS_FILE_TYPE_GPS_TRACK):
+            entry = result.get(fds_server_key(suffixes[file_type], int(report_time)))
+            if not isinstance(entry, dict) or not entry.get("url") or not entry.get("obj_key"):
+                # 上游行为：obj_key 缺失即静默放弃该文件类型（如该运动无 GPS）。
+                logger.info("No FDS entry for %s file_type=%s", workout_id, file_type)
+                continue
+            try:
+                decrypted = await self._download_fds_blob(entry["url"], entry["obj_key"])
+                if file_type == FDS_FILE_TYPE_SPORT_RECORD:
+                    for segment_start, records in parse_sport_record(
+                        decrypted, int(proto_type)
+                    ):
+                        for index, record in enumerate(records):
+                            epoch = segment_start + index
+                            samples.append(
+                                WorkoutSample(
+                                    id=f"mi_fitness_sample_{user_resolved}_{workout_id}_{epoch - int(start_at.timestamp())}",
+                                    **base_fields,
+                                    workout_id=str(workout_id),
+                                    offset_seconds=epoch - int(start_at.timestamp()),
+                                    timestamp=self._timestamp_to_datetime(epoch),
+                                    heart_rate_bpm=record.get(TYPE_HR),
+                                    calories_kcal=(
+                                        float(record[TYPE_CALORIES])
+                                        if TYPE_CALORIES in record
+                                        else None
+                                    ),
+                                    distance_m=(
+                                        float(record[TYPE_DISTANCE])
+                                        if TYPE_DISTANCE in record
+                                        else None
+                                    ),
+                                    steps=None,
+                                    cadence=record.get(TYPE_CADENCE),
+                                    pace_sec_per_km=(
+                                        float(record[TYPE_PACE])
+                                        if TYPE_PACE in record
+                                        else None
+                                    ),
+                                    speed_mps=(
+                                        float(record[TYPE_SPEED])
+                                        if TYPE_SPEED in record
+                                        else None
+                                    ),
+                                    altitude_m=(
+                                        float(record[TYPE_HEIGHT_VALUE])
+                                        if TYPE_HEIGHT_VALUE in record
+                                        else None
+                                    ),
+                                )
+                            )
+                else:
+                    for point in parse_gps_record(decrypted):
+                        offset = point.timestamp - int(start_at.timestamp())
+                        gps_points.append(
+                            GpsPoint(
+                                id=f"mi_fitness_gps_{user_resolved}_{workout_id}_{offset}",
+                                **base_fields,
+                                workout_id=str(workout_id),
+                                offset_seconds=offset,
+                                timestamp=self._timestamp_to_datetime(point.timestamp),
+                                latitude=point.latitude,
+                                longitude=point.longitude,
+                                accuracy=point.accuracy,
+                                speed_mps=point.speed_mps,
+                                gps_source=point.gps_source,
+                                altitude_m=point.altitude_m,
+                                hdop=point.hdop,
+                            )
+                        )
+            except FdsParseError as exc:
+                logger.warning("FDS parse failed for %s: %s", workout_id, exc)
+                continue
+        return samples, gps_points
+
+    def _health_base_url(self) -> str:
+        return (
+            "https://hlth.io.mi.com"
+            if self.region in ("", "cn")
+            else f"https://{self.region}.hlth.io.mi.com"
+        )
+
+    @staticmethod
+    def _parse_workout_time(value: Any) -> datetime | None:
+        if not value:
+            return None
+        try:
+            if isinstance(value, datetime):
+                return value
+            parsed = datetime.fromisoformat(str(value))
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+        except ValueError:
+            return None
+
+    async def _download_fds_blob(self, url: str, obj_key: str) -> bytes:
+        """下载预签名 blob（base64url 密文）并 AES 解密。"""
+        if not self._client:
+            raise RuntimeError("client not initialized")
+        response = await self._client.get(url)
+        response.raise_for_status()
+        return decrypt_fds_blob(response.text, obj_key)
 
     async def iter_body_measurements(
         self,

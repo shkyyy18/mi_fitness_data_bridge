@@ -12,11 +12,13 @@ from mi_fitness_mcp.models import (
     AbnormalHeartBeatEvent,
     BodyMeasurement,
     DailyActivity,
+    GpsPoint,
     HeartRateSample,
     SleepSession,
     SpO2Sample,
     StressSample,
     Workout,
+    WorkoutSample,
 )
 
 
@@ -129,7 +131,134 @@ class Database:
                     avg_pace_sec_per_km REAL,
                     max_pace_sec_per_km REAL,
                     total_steps INTEGER,
+                    min_heart_rate_bpm INTEGER,
+                    valid_duration_seconds INTEGER,
+                    avg_cadence INTEGER,
+                    max_cadence INTEGER,
+                    avg_stride INTEGER,
+                    avg_speed_mps REAL,
+                    min_pace_sec_per_km REAL,
+                    avg_height_m REAL,
+                    max_height_m REAL,
+                    min_height_m REAL,
+                    rise_height_m REAL,
+                    fall_height_m REAL,
+                    total_climbing_m REAL,
+                    vo2max INTEGER,
+                    train_effect REAL,
+                    anaerobic_train_effect REAL,
+                    training_load INTEGER,
+                    recovery_time INTEGER,
+                    avg_spo2_pct INTEGER,
+                    fds_sid TEXT,
+                    proto_type INTEGER,
+                    report_version INTEGER,
+                    report_time INTEGER,
+                    tz_in_15min INTEGER,
                     UNIQUE(user_id, workout_id)
+                )
+            """)
+
+            # 运动明细汇总与 FDS 定位元数据（docs/workout-detail-feasibility.md
+            # Phase 1）：老库增量补列，缺失值待下次同步 workouts 后填充。
+            workout_columns = {row[1] for row in conn.execute("PRAGMA table_info(workouts)")}
+            for column_name, column_ddl in (
+                ("min_heart_rate_bpm", "INTEGER"),
+                ("valid_duration_seconds", "INTEGER"),
+                ("avg_cadence", "INTEGER"),
+                ("max_cadence", "INTEGER"),
+                ("avg_stride", "INTEGER"),
+                ("avg_speed_mps", "REAL"),
+                ("min_pace_sec_per_km", "REAL"),
+                ("avg_height_m", "REAL"),
+                ("max_height_m", "REAL"),
+                ("min_height_m", "REAL"),
+                ("rise_height_m", "REAL"),
+                ("fall_height_m", "REAL"),
+                ("total_climbing_m", "REAL"),
+                ("vo2max", "INTEGER"),
+                ("train_effect", "REAL"),
+                ("anaerobic_train_effect", "REAL"),
+                ("training_load", "INTEGER"),
+                ("recovery_time", "INTEGER"),
+                ("avg_spo2_pct", "INTEGER"),
+                ("fds_sid", "TEXT"),
+                ("proto_type", "INTEGER"),
+                ("report_version", "INTEGER"),
+                ("report_time", "INTEGER"),
+                ("tz_in_15min", "INTEGER"),
+            ):
+                if column_name not in workout_columns:
+                    conn.execute(f"ALTER TABLE workouts ADD COLUMN {column_name} {column_ddl}")
+
+            # 运动秒级样本表（FDS fileType=0，docs/workout-detail-feasibility.md Phase 2）
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS workout_detail_samples (
+                    id TEXT PRIMARY KEY,
+                    provider TEXT NOT NULL,
+                    source_type TEXT NOT NULL,
+                    source_record_id TEXT,
+                    user_id TEXT NOT NULL,
+                    device_id TEXT,
+                    timezone TEXT DEFAULT 'UTC',
+                    collected_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    workout_id TEXT NOT NULL,
+                    offset_seconds INTEGER NOT NULL,
+                    timestamp TIMESTAMP NOT NULL,
+                    heart_rate_bpm INTEGER,
+                    calories_kcal REAL,
+                    distance_m REAL,
+                    steps INTEGER,
+                    cadence INTEGER,
+                    pace_sec_per_km REAL,
+                    speed_mps REAL,
+                    altitude_m REAL,
+                    UNIQUE(user_id, workout_id, offset_seconds)
+                )
+            """)
+
+            # proto 22（户外计步类）解析引入的通道：早期 Phase 2 建表
+            # 没有这 4 列，增量补列。
+            detail_columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(workout_detail_samples)")
+            }
+            for column_name, column_ddl in (
+                ("cadence", "INTEGER"),
+                ("pace_sec_per_km", "REAL"),
+                ("speed_mps", "REAL"),
+                ("altitude_m", "REAL"),
+            ):
+                if column_name not in detail_columns:
+                    conn.execute(
+                        f"ALTER TABLE workout_detail_samples ADD COLUMN {column_name} {column_ddl}"
+                    )
+
+            # 运动 GPS 轨迹点表（FDS fileType=2）
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS workout_gps_points (
+                    id TEXT PRIMARY KEY,
+                    provider TEXT NOT NULL,
+                    source_type TEXT NOT NULL,
+                    source_record_id TEXT,
+                    user_id TEXT NOT NULL,
+                    device_id TEXT,
+                    timezone TEXT DEFAULT 'UTC',
+                    collected_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    workout_id TEXT NOT NULL,
+                    offset_seconds INTEGER NOT NULL,
+                    timestamp TIMESTAMP NOT NULL,
+                    latitude REAL NOT NULL,
+                    longitude REAL NOT NULL,
+                    accuracy REAL,
+                    speed_mps REAL,
+                    gps_source INTEGER,
+                    altitude_m REAL,
+                    hdop REAL,
+                    UNIQUE(user_id, workout_id, offset_seconds)
                 )
             """)
 
@@ -428,8 +557,16 @@ class Database:
                     id, provider, source_type, source_record_id, user_id, device_id,
                     timezone, collected_at, workout_id, activity_type, start_at, end_at,
                     duration_minutes, distance_m, calories_kcal, avg_heart_rate_bpm,
-                    max_heart_rate_bpm, avg_pace_sec_per_km, max_pace_sec_per_km, total_steps
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    max_heart_rate_bpm, avg_pace_sec_per_km, max_pace_sec_per_km, total_steps,
+                    min_heart_rate_bpm, valid_duration_seconds, avg_cadence, max_cadence,
+                    avg_stride, avg_speed_mps, min_pace_sec_per_km, avg_height_m,
+                    max_height_m, min_height_m, rise_height_m, fall_height_m,
+                    total_climbing_m, vo2max, train_effect, anaerobic_train_effect,
+                    training_load, recovery_time, avg_spo2_pct, fds_sid, proto_type,
+                    report_version, report_time, tz_in_15min
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                          ?, ?, ?, ?)
                 ON CONFLICT(user_id, workout_id) DO UPDATE SET
                     activity_type = excluded.activity_type,
                     end_at = excluded.end_at,
@@ -441,6 +578,30 @@ class Database:
                     avg_pace_sec_per_km = excluded.avg_pace_sec_per_km,
                     max_pace_sec_per_km = excluded.max_pace_sec_per_km,
                     total_steps = excluded.total_steps,
+                    min_heart_rate_bpm = excluded.min_heart_rate_bpm,
+                    valid_duration_seconds = excluded.valid_duration_seconds,
+                    avg_cadence = excluded.avg_cadence,
+                    max_cadence = excluded.max_cadence,
+                    avg_stride = excluded.avg_stride,
+                    avg_speed_mps = excluded.avg_speed_mps,
+                    min_pace_sec_per_km = excluded.min_pace_sec_per_km,
+                    avg_height_m = excluded.avg_height_m,
+                    max_height_m = excluded.max_height_m,
+                    min_height_m = excluded.min_height_m,
+                    rise_height_m = excluded.rise_height_m,
+                    fall_height_m = excluded.fall_height_m,
+                    total_climbing_m = excluded.total_climbing_m,
+                    vo2max = excluded.vo2max,
+                    train_effect = excluded.train_effect,
+                    anaerobic_train_effect = excluded.anaerobic_train_effect,
+                    training_load = excluded.training_load,
+                    recovery_time = excluded.recovery_time,
+                    avg_spo2_pct = excluded.avg_spo2_pct,
+                    fds_sid = excluded.fds_sid,
+                    proto_type = excluded.proto_type,
+                    report_version = excluded.report_version,
+                    report_time = excluded.report_time,
+                    tz_in_15min = excluded.tz_in_15min,
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 (
@@ -464,10 +625,177 @@ class Database:
                     workout.avg_pace_sec_per_km,
                     workout.max_pace_sec_per_km,
                     workout.total_steps,
+                    workout.min_heart_rate_bpm,
+                    workout.valid_duration_seconds,
+                    workout.avg_cadence,
+                    workout.max_cadence,
+                    workout.avg_stride,
+                    workout.avg_speed_mps,
+                    workout.min_pace_sec_per_km,
+                    workout.avg_height_m,
+                    workout.max_height_m,
+                    workout.min_height_m,
+                    workout.rise_height_m,
+                    workout.fall_height_m,
+                    workout.total_climbing_m,
+                    workout.vo2max,
+                    workout.train_effect,
+                    workout.anaerobic_train_effect,
+                    workout.training_load,
+                    workout.recovery_time,
+                    workout.avg_spo2_pct,
+                    workout.fds_sid,
+                    workout.proto_type,
+                    workout.report_version,
+                    workout.report_time,
+                    workout.tz_in_15min,
                 ),
             )
             conn.commit()
             return not existed
+
+    @staticmethod
+    def _workout_child_base(record: WorkoutSample | GpsPoint) -> tuple:
+        return (
+            record.id,
+            record.provider,
+            record.source_type,
+            record.source_record_id,
+            record.user_id,
+            record.device_id,
+            record.timezone,
+            record.collected_at.isoformat() if record.collected_at else None,
+            record.workout_id,
+            record.offset_seconds,
+            record.timestamp.isoformat(),
+        )
+
+    def query_workout_detail_samples(self, user_id: str, workout_id: str) -> list[dict[str, Any]]:
+        """All per-second detail samples of one workout, ordered by offset."""
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM workout_detail_samples
+                WHERE user_id = ? AND workout_id = ?
+                ORDER BY offset_seconds
+                """,
+                (user_id, workout_id),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def workout_detail_counts(self, user_id: str, workout_id: str) -> tuple[int, int]:
+        """该运动已有的明细行数：(samples, gps_points)。用于增量跳过。"""
+        with self._get_connection() as conn:
+            samples = conn.execute(
+                "SELECT COUNT(*) FROM workout_detail_samples WHERE user_id = ? AND workout_id = ?",
+                (user_id, workout_id),
+            ).fetchone()[0]
+            gps = conn.execute(
+                "SELECT COUNT(*) FROM workout_gps_points WHERE user_id = ? AND workout_id = ?",
+                (user_id, workout_id),
+            ).fetchone()[0]
+        return samples, gps
+
+    def insert_workout_detail_samples(self, records: list[WorkoutSample]) -> tuple[int, int]:
+        """Batch-upsert per-second samples of one workout. Returns (added, updated)."""
+        if not records:
+            return 0, 0
+        count_sql = (
+            "SELECT COUNT(*) FROM workout_detail_samples WHERE user_id = ? AND workout_id = ?"
+        )
+        with self._get_connection() as conn:
+            before = conn.execute(
+                count_sql, (records[0].user_id, records[0].workout_id)
+            ).fetchone()[0]
+            conn.executemany(
+                """
+                INSERT INTO workout_detail_samples (
+                    id, provider, source_type, source_record_id, user_id, device_id,
+                    timezone, collected_at, workout_id, offset_seconds, timestamp,
+                    heart_rate_bpm, calories_kcal, distance_m, steps,
+                    cadence, pace_sec_per_km, speed_mps, altitude_m
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, workout_id, offset_seconds) DO UPDATE SET
+                    timestamp = excluded.timestamp,
+                    heart_rate_bpm = excluded.heart_rate_bpm,
+                    calories_kcal = excluded.calories_kcal,
+                    distance_m = excluded.distance_m,
+                    steps = excluded.steps,
+                    cadence = excluded.cadence,
+                    pace_sec_per_km = excluded.pace_sec_per_km,
+                    speed_mps = excluded.speed_mps,
+                    altitude_m = excluded.altitude_m,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                [
+                    self._workout_child_base(record)
+                    + (
+                        record.heart_rate_bpm,
+                        record.calories_kcal,
+                        record.distance_m,
+                        record.steps,
+                        record.cadence,
+                        record.pace_sec_per_km,
+                        record.speed_mps,
+                        record.altitude_m,
+                    )
+                    for record in records
+                ],
+            )
+            conn.commit()
+            after = conn.execute(count_sql, (records[0].user_id, records[0].workout_id)).fetchone()[
+                0
+            ]
+        added = max(0, after - before)
+        return added, max(0, len(records) - added)
+
+    def insert_workout_gps_points(self, records: list[GpsPoint]) -> tuple[int, int]:
+        """Batch-upsert GPS track points of one workout. Returns (added, updated)."""
+        if not records:
+            return 0, 0
+        count_sql = "SELECT COUNT(*) FROM workout_gps_points WHERE user_id = ? AND workout_id = ?"
+        with self._get_connection() as conn:
+            before = conn.execute(
+                count_sql, (records[0].user_id, records[0].workout_id)
+            ).fetchone()[0]
+            conn.executemany(
+                """
+                INSERT INTO workout_gps_points (
+                    id, provider, source_type, source_record_id, user_id, device_id,
+                    timezone, collected_at, workout_id, offset_seconds, timestamp,
+                    latitude, longitude, accuracy, speed_mps, gps_source, altitude_m, hdop
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, workout_id, offset_seconds) DO UPDATE SET
+                    timestamp = excluded.timestamp,
+                    latitude = excluded.latitude,
+                    longitude = excluded.longitude,
+                    accuracy = excluded.accuracy,
+                    speed_mps = excluded.speed_mps,
+                    gps_source = excluded.gps_source,
+                    altitude_m = excluded.altitude_m,
+                    hdop = excluded.hdop,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                [
+                    self._workout_child_base(record)
+                    + (
+                        record.latitude,
+                        record.longitude,
+                        record.accuracy,
+                        record.speed_mps,
+                        record.gps_source,
+                        record.altitude_m,
+                        record.hdop,
+                    )
+                    for record in records
+                ],
+            )
+            conn.commit()
+            after = conn.execute(count_sql, (records[0].user_id, records[0].workout_id)).fetchone()[
+                0
+            ]
+        added = max(0, after - before)
+        return added, max(0, len(records) - added)
 
     def insert_body_measurement(self, measurement: BodyMeasurement) -> bool:
         """Insert or update body measurement record."""
@@ -807,19 +1135,26 @@ class Database:
     def query_workouts(
         self,
         user_id: str,
-        start_date: str,
-        end_date: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Query workout records."""
+        """Query workout records; dates optional (None = open-ended)."""
+        clauses = ["user_id = ?"]
+        params: list[str] = [user_id]
+        if start_date:
+            clauses.append("substr(start_at, 1, 10) >= ?")
+            params.append(start_date)
+        if end_date:
+            clauses.append("substr(start_at, 1, 10) <= ?")
+            params.append(end_date)
         with self._get_connection() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT * FROM workouts
-                WHERE user_id = ?
-                AND substr(start_at, 1, 10) >= ? AND substr(start_at, 1, 10) <= ?
+                WHERE {" AND ".join(clauses)}
                 ORDER BY start_at
                 """,
-                (user_id, start_date, end_date),
+                params,
             ).fetchall()
             return [dict(row) for row in rows]
 
@@ -1118,6 +1453,8 @@ class Database:
                 ("spo2", "spo2_samples", "timestamp"),
                 ("stress", "stress_samples", "timestamp"),
                 ("abnormal_heart_beat", "abnormal_heart_beat_events", "start_at"),
+                ("workout_detail", "workout_detail_samples", "timestamp"),
+                ("workout_gps", "workout_gps_points", "timestamp"),
             ]:
                 row = conn.execute(
                     f"""

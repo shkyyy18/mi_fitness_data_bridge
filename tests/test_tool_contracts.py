@@ -24,6 +24,7 @@ EXAMPLES = {
     "query_sleep": {**DATE_RANGE, "include_naps": False},
     "query_workouts": {**DATE_RANGE, "min_duration": 20},
     "workout_series": {"workout_id": "synthetic-workout", "max_points": 100},
+    "workout_detail_series": {"workout_id": "synthetic-workout", "max_points": 100},
     "query_spo2": {**DATE_RANGE, "limit": 10},
     "query_stress": {**DATE_RANGE, "level": "low"},
     "query_abnormal_heart_beat": DATE_RANGE,
@@ -39,7 +40,7 @@ async def test_wire_catalog_preserves_names_and_documents_every_parameter():
     # Exercise actual SDK serialization, not just Python metadata constants.
     tools = json.loads(result.model_dump_json(by_alias=True))["tools"]
     assert {tool["name"] for tool in tools} == set(EXAMPLES)
-    assert len(tools) == 15
+    assert len(tools) == 16
     for tool in tools:
         name = tool["name"]
         schema = tool["inputSchema"]

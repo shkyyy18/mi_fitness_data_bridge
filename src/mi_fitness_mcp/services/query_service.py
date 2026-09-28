@@ -354,10 +354,7 @@ class QueryService:
             record.get("source_record_id") in (None, "") for record in selected_records
         )
         quality_status = (
-            "complete"
-            if main_sleep_days == requested_days
-            and invalid_sessions == 0
-            else "partial"
+            "complete" if main_sleep_days == requested_days and invalid_sessions == 0 else "partial"
         )
         return {
             "main_sessions": main_sessions,
@@ -439,6 +436,25 @@ class QueryService:
                     "avg_pace_sec_per_km": record.get("avg_pace_sec_per_km"),
                     "max_pace_sec_per_km": record.get("max_pace_sec_per_km"),
                     "total_steps": record.get("total_steps"),
+                    "min_heart_rate_bpm": record.get("min_heart_rate_bpm"),
+                    "valid_duration_seconds": record.get("valid_duration_seconds"),
+                    "avg_cadence": record.get("avg_cadence"),
+                    "max_cadence": record.get("max_cadence"),
+                    "avg_stride": record.get("avg_stride"),
+                    "avg_speed_mps": record.get("avg_speed_mps"),
+                    "min_pace_sec_per_km": record.get("min_pace_sec_per_km"),
+                    "avg_height_m": record.get("avg_height_m"),
+                    "max_height_m": record.get("max_height_m"),
+                    "min_height_m": record.get("min_height_m"),
+                    "rise_height_m": record.get("rise_height_m"),
+                    "fall_height_m": record.get("fall_height_m"),
+                    "total_climbing_m": record.get("total_climbing_m"),
+                    "vo2max": record.get("vo2max"),
+                    "train_effect": record.get("train_effect"),
+                    "anaerobic_train_effect": record.get("anaerobic_train_effect"),
+                    "training_load": record.get("training_load"),
+                    "recovery_time": record.get("recovery_time"),
+                    "avg_spo2_pct": record.get("avg_spo2_pct"),
                 }
             )
 
@@ -558,9 +574,7 @@ class QueryService:
             points = [
                 {
                     "t": int(
-                        (
-                            datetime.fromisoformat(str(b["bucket_start"])) - start_dt
-                        ).total_seconds()
+                        (datetime.fromisoformat(str(b["bucket_start"])) - start_dt).total_seconds()
                     ),
                     "value": round(b["avg_bpm"], 1),
                     "min": b["min_bpm"],
@@ -574,9 +588,7 @@ class QueryService:
             bucket_seconds = resolution
             points = [
                 {
-                    "t": int(
-                        (datetime.fromisoformat(s["timestamp"]) - start_dt).total_seconds()
-                    ),
+                    "t": int((datetime.fromisoformat(s["timestamp"]) - start_dt).total_seconds()),
                     "value": int(s["bpm"]),
                 }
                 for s in samples
@@ -678,6 +690,223 @@ class QueryService:
                 "coverage_anchor": coverage_anchor,
                 "longest_gap_seconds": round(longest_gap),
                 "missing_metrics": [],
+            },
+        }
+
+    # 秒级明细样本（workout_detail_samples）支持的指标 -> (列名, 单位)
+    DETAIL_METRICS = {
+        "heart_rate": ("heart_rate_bpm", "bpm"),
+        "cadence": ("cadence", "spm"),
+        "pace": ("pace_sec_per_km", "sec_per_km"),
+        "speed": ("speed_mps", "m/s"),
+    }
+
+    def get_workout_detail_series(
+        self,
+        workout_id: str,
+        metric: str = "heart_rate",
+        resolution: int = DEFAULT_RESOLUTION_SECONDS,
+        max_points: int = DEFAULT_MAX_POINTS,
+        reference_max_hr: int | None = None,
+    ) -> dict[str, Any]:
+        """Per-second FDS detail series for one workout.
+
+        Contract: ``agent-safe-series/v1``（与 workout_series 同一信封语义）。
+        数据源是 workout_detail_samples（FDS 秒级记录），而非日常心率采样。
+        传感器的 0 值（起步未就绪）按缺失处理并如实计数。
+
+        Raises:
+            ValueError: if the metric is unsupported or the workout is unknown
+        """
+        if metric not in self.DETAIL_METRICS:
+            raise ValueError(
+                f"Unsupported workout detail metric: {metric}; one of {sorted(self.DETAIL_METRICS)}"
+            )
+        if resolution < 1:
+            raise ValueError("resolution must be at least 1 second")
+        if reference_max_hr is not None and reference_max_hr < 1:
+            raise ValueError("reference_max_hr must be a positive integer")
+        max_points = max(1, min(int(max_points), HARD_MAX_POINTS))
+
+        workout = self.db.get_workout(self.user_id, workout_id)
+        if workout is None:
+            raise ValueError(f"Unknown workout_id: {workout_id}")
+
+        column, unit = self.DETAIL_METRICS[metric]
+        rows = self.db.query_workout_detail_samples(self.user_id, workout_id)
+        start_at = workout["start_at"]
+        end_at = workout["end_at"]
+        start_dt = datetime.fromisoformat(start_at)
+        end_dt = datetime.fromisoformat(end_at)
+        duration_seconds = max(1, int((end_dt - start_dt).total_seconds()))
+
+        def _empty(missing: list[str]) -> dict[str, Any]:
+            return {
+                "workout_id": workout_id,
+                "activity_type": workout["activity_type"],
+                "metric": metric,
+                "unit": unit,
+                "contract_version": "agent-safe-series/v1",
+                "start_time": start_at,
+                "t_unit": "seconds_from_start",
+                "start_at": start_at,
+                "end_at": end_at,
+                "duration_seconds": duration_seconds,
+                "requested_resolution_seconds": resolution,
+                "resolution_seconds": resolution,
+                "points": [],
+                "stats": None,
+                "time_in_zone": None,
+                "downsampled": False,
+                "source_points": 0,
+                "returned_points": 0,
+                "method": "none",
+                "data_quality": {
+                    "sample_type": None,
+                    "expected_samples": 0,
+                    "actual_samples": 0,
+                    "sample_interval_seconds": None,
+                    "coverage_ratio": 0.0,
+                    "coverage_anchor": "nominal_duration",
+                    "longest_gap_seconds": duration_seconds,
+                    "missing_metrics": missing,
+                },
+            }
+
+        # 0 值是传感器起步未就绪的原始零，不是测量结果：按缺失处理并计数。
+        pairs: list[tuple[int, float]] = []
+        zero_or_null = 0
+        for row in rows:
+            raw = row.get(column)
+            if raw is None or float(raw) <= 0:
+                zero_or_null += 1
+                continue
+            pairs.append((int(row["offset_seconds"]), float(raw)))
+        source_points = len(pairs)
+
+        if source_points == 0:
+            envelope = _empty([metric])
+            envelope["data_quality"]["zero_or_null_samples_excluded"] = zero_or_null
+            return envelope
+
+        offsets = [p[0] for p in pairs]
+        gaps = [b - a for a, b in pairwise(offsets)]
+        median_interval = statistics.median(gaps) if gaps else 1.0
+        longest_gap = max(gaps) if gaps else 0
+
+        values = [v for _, v in pairs]
+        downsampled = source_points > max_points
+        if downsampled:
+            # 自适应桶：尊重请求的 resolution，除非会超出 max_points。
+            bucket_seconds = max(resolution, math.ceil(duration_seconds / max_points))
+            buckets: dict[int, list[float]] = {}
+            for offset, value in pairs:
+                buckets.setdefault(offset // bucket_seconds, []).append(value)
+            points = [
+                {
+                    "t": key * bucket_seconds,
+                    "value": round(statistics.fmean(vs), 1),
+                    "min": min(vs),
+                    "max": max(vs),
+                    "samples": len(vs),
+                }
+                for key, vs in sorted(buckets.items())
+            ]
+            method = "time_bucket_mean"
+        else:
+            bucket_seconds = resolution
+            points = [{"t": offset, "value": value} for offset, value in pairs]
+            method = "none"
+
+        if len(values) >= 2:
+            quartiles = statistics.quantiles(values, n=4, method="inclusive")
+        else:
+            quartiles = [float(values[0])] * 3
+        stats = {
+            "avg": round(statistics.fmean(values), 1),
+            "min": min(values),
+            "max": max(values),
+            "p25": round(quartiles[0], 1),
+            "p50": round(quartiles[1], 1),
+            "p75": round(quartiles[2], 1),
+            "percentile_method": "linear_interpolation",
+        }
+
+        time_in_zone = None
+        if metric == "heart_rate":
+            if reference_max_hr is not None:
+                reference_max = int(reference_max_hr)
+                reference_source = "caller_provided"
+            elif workout.get("max_heart_rate_bpm"):
+                reference_max = int(workout["max_heart_rate_bpm"])
+                reference_source = "activity_recorded_max"
+            else:
+                reference_max = max(int(v) for v in values)
+                reference_source = "observed_max"
+            bounds = [int(reference_max * f) for f in ZONE_FRACTIONS]
+            zone_seconds = [0.0] * (len(bounds) + 1)
+            for _, value in pairs:
+                zone = sum(value >= bound for bound in bounds)
+                zone_seconds[zone] += median_interval
+            time_in_zone = {
+                "zone_model": "percent_of_reference_max_hr",
+                "reference_max_bpm": reference_max,
+                "reference_source": reference_source,
+                "zones": [
+                    {
+                        "zone": i + 1,
+                        "min_bpm": bounds[i - 1] if i > 0 else None,
+                        "max_bpm": bounds[i] - 1 if i < len(bounds) else None,
+                        "seconds": round(zone_seconds[i]),
+                    }
+                    for i in range(len(bounds) + 1)
+                ],
+            }
+
+        nominal_seconds = 0
+        if workout.get("duration_minutes"):
+            nominal_seconds = int(workout["duration_minutes"]) * 60
+        elif end_dt > start_dt:
+            nominal_seconds = duration_seconds
+        if nominal_seconds > 0:
+            expected_samples = nominal_seconds / median_interval if median_interval else 0
+            coverage_anchor = "nominal_duration"
+        else:
+            expected_samples = source_points
+            coverage_anchor = "sample_span"
+
+        return {
+            "workout_id": workout_id,
+            "activity_type": workout["activity_type"],
+            "metric": metric,
+            "unit": unit,
+            "contract_version": "agent-safe-series/v1",
+            "start_time": start_at,
+            "t_unit": "seconds_from_start",
+            "start_at": start_at,
+            "end_at": end_at,
+            "duration_seconds": duration_seconds,
+            "requested_resolution_seconds": resolution,
+            "resolution_seconds": bucket_seconds,
+            "points": points,
+            "stats": stats,
+            "time_in_zone": time_in_zone,
+            "downsampled": downsampled,
+            "source_points": source_points,
+            "returned_points": len(points),
+            "method": method,
+            "data_quality": {
+                "sample_type": None,
+                "expected_samples": round(expected_samples),
+                "actual_samples": source_points,
+                "sample_interval_seconds": round(median_interval, 3),
+                "coverage_ratio": round(min(1.0, source_points / expected_samples), 3)
+                if expected_samples
+                else 0.0,
+                "coverage_anchor": coverage_anchor,
+                "longest_gap_seconds": round(longest_gap),
+                "missing_metrics": [],
+                "zero_or_null_samples_excluded": zero_or_null,
             },
         }
 
