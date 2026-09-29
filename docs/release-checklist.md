@@ -46,3 +46,5 @@
 - Still open: vulnerability reporting, branch rules, and post-release adoption evidence.
 
 - 2026-09-23: v0.3.2 release candidate — 260 tests, Ruff, Python syntax compilation, `git diff --check`, and sdist/wheel build passed on Python 3.12. Sleep-score daily-report supplementation remains unverified against the Issue reporter's account/device/region; the release notes and Issue response must preserve that caveat.
+
+- 2026-09-29: v0.3.3 release candidate — 297 synthetic/mock tests, Ruff, Python compilation, `git diff --check`, and sdist/wheel build passed locally. An isolated wheel install exposes version 0.3.3, both console commands, 17 public tools and 10 paginated queries; legacy names remain callable but are not advertised. GitHub matrix CI and Glama re-evaluation are separate publication gates; no real-account/device/region validation was performed for this release.

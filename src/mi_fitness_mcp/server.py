@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from jsonschema import validate
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
@@ -19,6 +20,7 @@ from mi_fitness_mcp.models import ConnectionStatus, QueryResponse
 from mi_fitness_mcp.services.query_service import QueryService
 from mi_fitness_mcp.services.sync_service import SyncService
 from mi_fitness_mcp.storage import Database
+from mi_fitness_mcp.storage.sync_history import SyncHistory
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +36,13 @@ app = Server(
         "data automatically. Outputs are JSON text; inspect status/error and data_quality, "
         "and never interpret missing records as normal health or zero measurements. "
         "Dates are inclusive YYYY-MM-DD; prefer narrow ranges and small sample limits. "
-        "Use query_workouts then workout_series for an activity curve, query_metric_series for "
+        "Use query_workouts then query_workout_series for an activity curve, query_metric_series for "
         "daily activity/weight trends, and the specific query tools for raw samples. "
-        "This is data access infrastructure, not medical advice."
+        "Naming: get_* reads singleton metadata/status; query_* selects records or series; "
+        "sync_data starts writes and cancel_sync stops a job. Read all activity columns with "
+        "query_daily_activity, one aggregated metric with query_metric_series, and original "
+        "weigh-ins with query_body_measurements. Pagination uses limit/offset and next_offset; "
+        "keep filters unchanged and do not sync between pages. This is not medical advice."
     ),
 )
 
@@ -45,8 +51,10 @@ db = None
 adapter = None
 sync_service = None
 query_service = None
+sync_history: SyncHistory | None = None
 sync_tasks: dict[str, dict[str, Any]] = {}
 sync_active = False
+active_sync_id: str | None = None
 MAX_SYNC_TASKS = 100
 
 
@@ -63,7 +71,7 @@ def _prune_sync_tasks() -> None:
 
 @app.list_tools()
 async def list_tools() -> list[Tool]:
-    return [
+    tools = [
         Tool(
             name="get_connection_status",
             description=(
@@ -172,22 +180,20 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="get_sync_status",
             description=(
-                "Poll an existing background sync using the exact sync_id returned by "
-                "sync_data(background=true). Read-only in-memory lookup; no cloud request or new "
-                "sync. Returns queued/running with timestamps, then the sync result "
-                "(ok/partial/error, counts and per-type results), or cancelled. Unknown, pruned or "
-                "pre-restart IDs return status=error; task history is process-local and bounded. This "
-                "is job progress, not cloud connectivity (get_connection_status) or stored date "
-                "coverage (get_data_coverage)."
+                "Read one MCP sync job by sync_id, including after a server restart. Returns "
+                "sync_id, status, timestamps and available result counts. States are queued, "
+                "running, ok, partial, error, cancelled or interrupted (previous process stopped). "
+                "Read-only local lookup; no cloud request. History retains the latest 500 completed "
+                "jobs per account; unknown/expired IDs return status=error. Use query_sync_history "
+                "to discover IDs, cancel_sync to stop a live background job, or get_connection_status "
+                "for cloud connectivity. Restarted lookups omit raw error text for privacy."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "sync_id": {
                         "type": "string",
-                        "description": "Opaque ID returned by sync_data with "
-                        "background=true in this running server "
-                        "process; not a workout ID.",
+                        "description": "Exact sync_id returned by sync_data or query_sync_history; not a workout ID.",
                         "minLength": 1,
                     }
                 },
@@ -209,7 +215,7 @@ async def list_tools() -> list[Tool]:
                 "source and data.profile containing account_id_masked, configured timezone and "
                 "devices (currently an empty placeholder). Never returns credentials or plaintext "
                 "account IDs. Returns status=error if disconnected; get_connection_status can "
-                "establish/check the connection first. Use get_daily_summary for activity totals."
+                "establish/check the connection first. Use query_daily_activity for activity totals."
             ),
             inputSchema={"type": "object", "properties": {}, "additionalProperties": False},
             annotations={
@@ -220,9 +226,9 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
-            name="get_daily_summary",
+            name="query_daily_activity",
             description=(
-                "Read daily activity totals: steps, distance_m, active_kcal, total_kcal, floors and "
+                "Choose this for a multi-column daily activity table, not a single-metric trend. Read daily activity totals: steps, distance_m, active_kcal, total_kcal, floors and "
                 "active_minutes, plus data_quality. Supply date for one day or both "
                 "start_date/end_date for an inclusive YYYY-MM-DD range; date takes precedence if both "
                 "forms are given. Returns data.summaries and data.data_quality. Missing optional "
@@ -286,7 +292,7 @@ async def list_tools() -> list[Tool]:
                 "first day. aggregation (default sum) applies only to week/month daily values; latest "
                 "selects the last available day. Prefer avg or latest for weight. For raw body "
                 "readings use query_body_measurements; heart-rate samples use query_heart_rate; one "
-                "workout uses workout_series. Read-only local SQLite query; no cloud request or "
+                "workout uses query_workout_series. Read-only local SQLite query; no cloud request or "
                 "automatic sync. Requires a configured local account/cache. Returns JSON text with "
                 "status, source=cache, generated_at and data; empty lists mean no cached matches, not "
                 "zero measurements. Use get_data_coverage to inspect availability or sync_data to "
@@ -355,9 +361,9 @@ async def list_tools() -> list[Tool]:
                 "Read timestamped heart-rate samples in bpm over an inclusive YYYY-MM-DD range, "
                 "optionally filtering sample_type. Returns data.samples [{timestamp, bpm, "
                 "sample_type}] and data.count, earliest first. limit defaults to 5000; use a smaller "
-                "limit/date window for large datasets, with no pagination cursor. The cloud adapter "
+                "page/date window for large datasets. The cloud adapter "
                 "normally stores resting/active/passive, so sample_type=workout may be empty; use "
-                "workout_series with a workout_id to analyze all samples in that activity window. Not "
+                "query_workout_series with a workout_id to analyze all samples in that activity window. Not "
                 "a diagnosis. Read-only local SQLite query; no cloud request or automatic sync. "
                 "Requires a configured local account/cache. Returns JSON text with status, "
                 "source=cache, generated_at and data; empty lists mean no cached matches, not zero "
@@ -392,14 +398,13 @@ async def list_tools() -> list[Tool]:
                         "omit for all. Cloud records normally "
                         "use resting/active/passive; for "
                         "workout-window samples use "
-                        "workout_series.",
+                        "query_workout_series.",
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Maximum earliest matching records to return "
-                        "(default 5000); use a small positive value "
-                        "to limit context. No offset/cursor is "
-                        "available.",
+                    "description": "Maximum earliest matching records to return "
+                         "(default 5000); use a small positive value "
+                         "to limit context; use offset for subsequent pages.",
                         "default": 5000,
                         "minimum": 1,
                     },
@@ -423,7 +428,7 @@ async def list_tools() -> list[Tool]:
                 "returns all available fields; otherwise timestamp plus selected fields, with absent "
                 "optional measurements omitted. Units are kg for mass, percent for body fat/water, "
                 "dimensionless for BMI. Use query_metric_series(metric=weight_kg) for a daily or "
-                "aggregated weight trend. No pagination; narrow the date range. Read-only local "
+                "aggregated weight trend. latest_only selects before pagination. Read-only local "
                 "SQLite query; no cloud request or automatic sync. Requires a configured local "
                 "account/cache. Returns JSON text with status, source=cache, generated_at and data; "
                 "empty lists mean no cached matches, not zero measurements. Use get_data_coverage to "
@@ -494,8 +499,9 @@ async def list_tools() -> list[Tool]:
                 "include_naps defaults true and affects the raw list only, not main-sleep selection. "
                 "Times include start_at/end_at; durations are minutes; sleep_score/source can be null "
                 "and missing scores are not zero. Expand dates around midnight if needed; raw counts "
-                "can differ from wake-date summary counts. Use this instead of get_daily_summary for "
-                "sleep. No pagination; narrow the date range. Read-only local SQLite query; no cloud "
+                "can differ from wake-date summary counts. Use this instead of query_daily_activity for "
+                "sleep. Pagination affects sessions/count only; main_sessions, metrics and quality "
+                "still describe the full date range, so keep ranges narrow. Read-only local SQLite query; no cloud "
                 "request or automatic sync. Requires a configured local account/cache. Returns JSON "
                 "text with status, source=cache, generated_at and data; empty lists mean no cached "
                 "matches, not zero measurements. Use get_data_coverage to inspect availability or "
@@ -548,8 +554,8 @@ async def list_tools() -> list[Tool]:
                 "start_at/end_at, duration_minutes, distance_m, calories_kcal and available "
                 "heart-rate/pace fields (missing fields may be null). activity_types matches "
                 "case-insensitively; min_duration is minutes and min_distance_km is kilometers "
-                "(unlike output distance_m). Filters combine with AND. No pagination; narrow dates. "
-                "Use a returned workout_id with workout_series for a heart-rate curve; this tool "
+                "(unlike output distance_m). Filters combine with AND before pagination. "
+                "Use a returned workout_id with query_workout_series for a heart-rate curve; this tool "
                 "returns session summaries, not samples. Read-only local SQLite query; no cloud "
                 "request or automatic sync. Requires a configured local account/cache. Returns JSON "
                 "text with status, source=cache, generated_at and data; empty lists mean no cached "
@@ -613,7 +619,7 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
-            name="workout_series",
+            name="query_workout_series",
             description=(
                 "Read an auto-downsampled heart-rate curve for one workout_id obtained from "
                 "query_workouts (contract agent-safe-series/v1). Uses all cached heart-rate sample "
@@ -689,8 +695,8 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Read stored blood oxygen saturation samples (spo2_pct, percent) over an inclusive "
                 "YYYY-MM-DD range. Returns data.samples [{timestamp, spo2_pct}] and data.count, "
-                "earliest first. limit defaults to 5000; no pagination cursor, so narrow dates or "
-                "request a smaller limit. These are device measurements, not a diagnosis; missing "
+                "earliest first. limit defaults to 5000; use offset for subsequent pages. "
+                "These are device measurements, not a diagnosis; missing "
                 "records do not indicate normal oxygen levels. Use query_heart_rate for bpm rather "
                 "than oxygen saturation. Read-only local SQLite query; no cloud request or automatic "
                 "sync. Requires a configured local account/cache. Returns JSON text with status, "
@@ -721,10 +727,9 @@ async def list_tools() -> list[Tool]:
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Maximum earliest matching records to return "
-                        "(default 5000); use a small positive value "
-                        "to limit context. No offset/cursor is "
-                        "available.",
+                    "description": "Maximum earliest matching records to return "
+                         "(default 5000); use a small positive value "
+                         "to limit context; use offset for subsequent pages.",
                         "default": 5000,
                         "minimum": 1,
                     },
@@ -745,8 +750,8 @@ async def list_tools() -> list[Tool]:
                 "Read device stress samples over an inclusive YYYY-MM-DD range, optionally filtered "
                 "by level (low/medium/high). Returns data.samples [{timestamp, stress_score, level}] "
                 "and data.count, earliest first. stress_score is the upstream device score, not a "
-                "clinical assessment. limit defaults to 5000; no pagination cursor, so narrow dates "
-                "or request a smaller limit. Use query_sleep for sleep quality rather than inferring "
+                "clinical assessment. limit defaults to 5000; use offset for subsequent pages. "
+                "Use query_sleep for sleep quality rather than inferring "
                 "it from stress. Read-only local SQLite query; no cloud request or automatic sync. "
                 "Requires a configured local account/cache. Returns JSON text with status, "
                 "source=cache, generated_at and data; empty lists mean no cached matches, not zero "
@@ -782,10 +787,9 @@ async def list_tools() -> list[Tool]:
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Maximum earliest matching records to return "
-                        "(default 5000); use a small positive value "
-                        "to limit context. No offset/cursor is "
-                        "available.",
+                    "description": "Maximum earliest matching records to return "
+                         "(default 5000); use a small positive value "
+                         "to limit context; use offset for subsequent pages.",
                         "default": 5000,
                         "minimum": 1,
                     },
@@ -805,8 +809,8 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Read device-reported abnormal-heartbeat events starting within an inclusive "
                 "YYYY-MM-DD range. Returns data.events [{event_id, start_at, end_at, "
-                "duration_seconds}] and data.count, earliest first. limit defaults to 5000; no "
-                "pagination cursor, so narrow dates or request a smaller limit. Events are upstream "
+                "duration_seconds}] and data.count, earliest first. limit defaults to 5000; use "
+                "offset for subsequent pages. Events are upstream "
                 "flags, not a diagnosis; an empty list is not evidence of a healthy heart. Use "
                 "query_heart_rate for ordinary bpm samples, not this event list. Read-only local "
                 "SQLite query; no cloud request or automatic sync. Requires a configured local "
@@ -837,10 +841,9 @@ async def list_tools() -> list[Tool]:
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Maximum earliest matching records to return "
-                        "(default 5000); use a small positive value "
-                        "to limit context. No offset/cursor is "
-                        "available.",
+                    "description": "Maximum earliest matching records to return "
+                         "(default 5000); use a small positive value "
+                         "to limit context; use offset for subsequent pages.",
                         "default": 5000,
                         "minimum": 1,
                     },
@@ -901,6 +904,92 @@ async def list_tools() -> list[Tool]:
             },
         ),
     ]
+    read_only = {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+    tools.extend(
+        [
+            Tool(
+                name="cancel_sync",
+                description=(
+                    "Cancel a queued/running background MCP sync by its exact sync_id. Returns the "
+                    "terminal job status after cancellation completes; already-finished jobs are "
+                    "returned unchanged. Stops future requests without deleting or rolling back "
+                    "records already committed to SQLite; counts may be incomplete. Unknown IDs "
+                    "or foreground jobs return status=error. No new cloud request. Use get_sync_status "
+                    "to inspect progress and sync_data with user consent to resume via a new job."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "sync_id": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Exact ID of the background sync job to stop.",
+                        }
+                    },
+                    "required": ["sync_id"],
+                    "additionalProperties": False,
+                },
+                annotations={**read_only, "readOnlyHint": False},
+            ),
+            Tool(
+                name="query_sync_history",
+                description=(
+                    "List this account's MCP sync jobs, newest first, from persistent local SQLite. "
+                    "Returns data.jobs and data.pagination with timestamps, statuses, available "
+                    "counts and safe error codes, never credentials, raw errors or health records. "
+                    "Includes foreground/background jobs started since this feature was installed, "
+                    "not CLI syncs; retains the latest 500 completed jobs plus active jobs. "
+                    "Read-only, no cloud calls. Use get_sync_status for one ID and cancel_sync "
+                    "for a live background job. Empty jobs means no retained history."
+                ),
+                inputSchema={"type": "object", "properties": {}, "additionalProperties": False},
+                annotations=read_only,
+            ),
+        ]
+    )
+    paged = {
+        "query_daily_activity",
+        "query_metric_series",
+        "query_body_measurements",
+        "query_sleep",
+        "query_workouts",
+        "query_heart_rate",
+        "query_spo2",
+        "query_stress",
+        "query_abnormal_heart_beat",
+        "query_sync_history",
+    }
+    for tool in tools:
+        if tool.name not in paged:
+            continue
+        default = 20 if tool.name == "query_sync_history" else 5000
+        tool.inputSchema["properties"].update(
+            {
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 5000,
+                    "default": default,
+                    "description": "Maximum records per page (1-5000); count describes this page only.",
+                },
+                "offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 0,
+                    "description": "Zero-based position; pass pagination.next_offset unchanged with the same filters.",
+                },
+            }
+        )
+        tool.description += (
+            " Returns data.pagination {limit, offset, has_more, next_offset}; next_offset is null "
+            "at the end. Keep filters unchanged and avoid syncing between pages."
+        )
+    return tools
 
 
 def _validate_date_arguments(name: str, arguments: dict[str, Any]) -> None:
@@ -926,16 +1015,77 @@ def _validate_date_arguments(name: str, arguments: dict[str, Any]) -> None:
         raise ValueError("start_date must not be after end_date")
 
 
+SQL_PAGED_TOOLS = {"query_heart_rate", "query_spo2", "query_stress", "query_abnormal_heart_beat"}
+PAGE_KEYS = {
+    "get_daily_summary": "summaries",
+    "query_metric_series": "series",
+    "query_body_measurements": "measurements",
+    "query_sleep": "sessions",
+    "query_workouts": "workouts",
+    "query_heart_rate": "samples",
+    "query_spo2": "samples",
+    "query_stress": "samples",
+    "query_abnormal_heart_beat": "events",
+    "query_sync_history": "jobs",
+}
+
+
+def _paginate_result(name: str, arguments: dict, result: dict) -> None:
+    if name not in PAGE_KEYS or result.get("status") != "ok":
+        return
+    limit = arguments.get("limit", 20 if name == "query_sync_history" else 5000)
+    offset = arguments.get("offset", 0)
+    data = result["data"]
+    key = PAGE_KEYS[name]
+    rows = data[key]
+    # SQL already applied offset, fetched limit+1 to detect a subsequent page.
+    if name not in SQL_PAGED_TOOLS | {"query_sync_history"}:
+        rows = rows[offset:]
+    has_more = len(rows) > limit
+    data[key] = rows[:limit]
+    if "count" in data:
+        data["count"] = len(data[key])
+    data["pagination"] = {
+        "limit": limit,
+        "offset": offset,
+        "has_more": has_more,
+        "next_offset": offset + limit if has_more else None,
+    }
+
+
+TOOL_ALIASES = {
+    "get_daily_summary": "query_daily_activity",
+    "workout_series": "query_workout_series",
+}
+
+
 @app.call_tool()
+async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
+    canonical = TOOL_ALIASES.get(name, name)
+    tool = next((tool for tool in await list_tools() if tool.name == canonical), None)
+    if tool is None:
+        raise ValueError(f"Unknown tool: {name}")
+    validate(arguments, tool.inputSchema)
+    return await call_tool(name, arguments)
+
+
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     try:
+        name = {value: key for key, value in TOOL_ALIASES.items()}.get(name, name)
         _validate_date_arguments(name, arguments)
+        page_arguments = arguments.copy()
+        if name in SQL_PAGED_TOOLS:
+            arguments = {**arguments, "limit": arguments.get("limit", 5000) + 1}
         if name == "get_connection_status":
             result = await _handle_get_connection_status()
         elif name == "sync_data":
             result = await _handle_sync_data(arguments)
         elif name == "get_sync_status":
             result = _handle_get_sync_status(arguments)
+        elif name == "cancel_sync":
+            result = await _handle_cancel_sync(arguments)
+        elif name == "query_sync_history":
+            result = _handle_query_sync_history(arguments)
         elif name == "get_profile":
             result = await _handle_get_profile()
         elif name == "get_daily_summary":
@@ -962,6 +1112,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             result = await _handle_get_data_coverage(arguments)
         else:
             result = {"status": "error", "error": f"Unknown tool: {name}"}
+        _paginate_result(name, page_arguments, result)
         return [TextContent(type="text", text=json.dumps(result, default=str))]
     except Exception as e:
         logger.exception("Mi Fitness tool error")
@@ -1025,62 +1176,109 @@ async def _handle_get_connection_status() -> dict:
     return result
 
 
-async def _background_sync(sync_id: str, arguments: dict) -> None:
-    global sync_active
+def _save_job(sync_id: str, **changes) -> dict:
+    state = sync_tasks[sync_id]
+    state.update(changes)
+    if sync_history:
+        sync_history.save(state)
+    return {key: value for key, value in state.items() if key != "task"}
+
+
+def _release_sync(sync_id: str) -> None:
+    global sync_active, active_sync_id
+    if active_sync_id == sync_id:
+        sync_active = False
+        active_sync_id = None
+
+
+async def _execute_sync(sync_id: str, arguments: dict) -> dict:
     try:
-        sync_tasks[sync_id].update(status="running", started_at=datetime.now(UTC).isoformat())
-        sync_tasks[sync_id] = await _run_sync_data(arguments, sync_id)
+        _save_job(sync_id, status="running", started_at=datetime.now(UTC).isoformat())
+        result = await _run_sync_data(arguments, sync_id)
+        result.pop("sync_id", None)
+        result.setdefault("finished_at", datetime.now(UTC).isoformat())
+        return _save_job(sync_id, **result)
     except asyncio.CancelledError:
-        sync_tasks[sync_id] = {"sync_id": sync_id, "status": "cancelled"}
+        _save_job(sync_id, status="cancelled", finished_at=datetime.now(UTC).isoformat())
         raise
     except Exception as exc:
-        logger.exception("Background synchronization failed")
-        sync_tasks[sync_id] = {
-            "sync_id": sync_id,
-            "status": "error",
-            "error_code": type(exc).__name__,
-            "error": str(exc),
-        }
+        logger.exception("Synchronization failed")
+        return _save_job(
+            sync_id,
+            status="error",
+            error_code=type(exc).__name__,
+            finished_at=datetime.now(UTC).isoformat(),
+        )
     finally:
-        sync_active = False
+        _release_sync(sync_id)
+
+
+async def _background_sync(sync_id: str, arguments: dict) -> None:
+    await _execute_sync(sync_id, arguments)
 
 
 async def _handle_sync_data(arguments: dict) -> dict:
-    global sync_active
-    # No await between check and assignment: foreground/background reservation is atomic.
+    global sync_active, active_sync_id
+    # Reserve before any await, including persistence and task creation.
     if sync_active:
         return {"status": "error", "error": "Another synchronization is in progress"}
-    sync_active = True
-
-    if arguments.get("background"):
-        try:
-            _prune_sync_tasks()
-            sync_id = str(uuid.uuid4())
-            sync_tasks[sync_id] = {
-                "sync_id": sync_id,
-                "status": "queued",
-                "created_at": datetime.now(UTC).isoformat(),
-            }
+    sync_id = str(uuid.uuid4())
+    sync_active, active_sync_id = True, sync_id
+    try:
+        _prune_sync_tasks()
+        sync_tasks[sync_id] = {
+            "sync_id": sync_id,
+            "status": "queued",
+            "created_at": datetime.now(UTC).isoformat(),
+        }
+        _save_job(sync_id)
+        if arguments.get("background"):
             task = asyncio.create_task(
                 _background_sync(sync_id, {**arguments, "background": False})
             )
             sync_tasks[sync_id]["task"] = task
             return {"status": "accepted", "sync_id": sync_id}
-        except Exception:
-            sync_active = False
-            raise
-
-    try:
-        return await _run_sync_data(arguments)
-    finally:
-        sync_active = False
+        return await _execute_sync(sync_id, arguments)
+    except BaseException:
+        _release_sync(sync_id)
+        raise
 
 
 def _handle_get_sync_status(arguments: dict) -> dict:
-    state = sync_tasks.get(arguments.get("sync_id"))
+    sync_id = arguments.get("sync_id")
+    state = sync_tasks.get(sync_id)
+    if state is None and sync_history:
+        state = sync_history.get(sync_id)
     if state is None:
-        return {"status": "error", "error": "Unknown sync_id"}
+        return {"status": "error", "error": "Unknown or expired sync_id"}
     return {key: value for key, value in state.items() if key != "task"}
+
+
+async def _handle_cancel_sync(arguments: dict) -> dict:
+    sync_id = arguments["sync_id"]
+    state = _handle_get_sync_status(arguments)
+    if state.get("status") not in {"queued", "running"}:
+        return state
+    task = sync_tasks.get(sync_id, {}).get("task")
+    if task is None:
+        return {"status": "error", "error": "Only this server's background jobs can be cancelled"}
+    task.cancel()
+    # gather consumes the target's cancellation, not cancellation of this MCP request.
+    await asyncio.gather(task, return_exceptions=True)
+    if sync_tasks[sync_id]["status"] in {"queued", "running"}:
+        # A task cancelled before its first step never executes its try/finally.
+        try:
+            _save_job(sync_id, status="cancelled", finished_at=datetime.now(UTC).isoformat())
+        finally:
+            _release_sync(sync_id)
+    return _handle_get_sync_status(arguments)
+
+
+def _handle_query_sync_history(arguments: dict) -> dict:
+    if not sync_history:
+        return {"status": "error", "error": "Sync history not initialized"}
+    jobs = sync_history.query(arguments.get("limit", 20) + 1, arguments.get("offset", 0))
+    return QueryResponse(status="ok", source="cache", data={"jobs": jobs}).model_dump()
 
 
 async def _run_sync_data(arguments: dict, sync_id: str | None = None) -> dict:
@@ -1142,6 +1340,14 @@ async def _run_sync_data(arguments: dict, sync_id: str | None = None) -> dict:
                     "error_code": type(exc).__name__,
                     "error": str(exc),
                 }
+            )
+        if sync_id in sync_tasks:
+            _save_job(
+                sync_id,
+                results=details.copy(),
+                records_added=totals["added"],
+                records_updated=totals["updated"],
+                records_skipped=totals["skipped"],
             )
     succeeded = [item["data_type"] for item in details if item["status"] == "ok"]
     has_partial = any(item["status"] == "partial" for item in details)
@@ -1228,6 +1434,7 @@ async def _handle_query_heart_rate(arguments: dict) -> dict:
         end_date=arguments["end_date"],
         sample_type=arguments.get("sample_type"),
         limit=arguments.get("limit"),
+        offset=arguments.get("offset", 0),
     )
     return QueryResponse(
         status="ok", source="cache", data={"samples": samples, "count": len(samples)}
@@ -1317,6 +1524,7 @@ async def _handle_query_spo2(arguments: dict) -> dict:
         start_date=arguments["start_date"],
         end_date=arguments["end_date"],
         limit=arguments.get("limit"),
+        offset=arguments.get("offset", 0),
     )
     return QueryResponse(
         status="ok", source="cache", data={"samples": samples, "count": len(samples)}
@@ -1331,6 +1539,7 @@ async def _handle_query_stress(arguments: dict) -> dict:
         end_date=arguments["end_date"],
         level=arguments.get("level"),
         limit=arguments.get("limit"),
+        offset=arguments.get("offset", 0),
     )
     return QueryResponse(
         status="ok", source="cache", data={"samples": samples, "count": len(samples)}
@@ -1344,6 +1553,7 @@ async def _handle_query_abnormal_heart_beat(arguments: dict) -> dict:
         start_date=arguments["start_date"],
         end_date=arguments["end_date"],
         limit=arguments.get("limit"),
+        offset=arguments.get("offset", 0),
     )
     return QueryResponse(
         status="ok", source="cache", data={"events": events, "count": len(events)}
@@ -1358,7 +1568,7 @@ async def _handle_get_data_coverage(arguments: dict) -> dict:
 
 
 async def main(db_path=None):
-    global config, db, adapter, sync_service, query_service
+    global config, db, adapter, sync_service, query_service, sync_history
     config = load_config()
     if db_path is not None:
         # Explicit CLI/--env override: serve strictly uses the given database.
@@ -1382,17 +1592,32 @@ async def main(db_path=None):
         query_service = QueryService(db, adapter.get_user_id() or "unknown")
     else:
         query_service = QueryService(db, "unknown")
+    sync_history = SyncHistory(db, query_service.user_id)
     try:
+        sync_history.acquire()
+        sync_history.recover_interrupted()
         async with stdio_server() as (read_stream, write_stream):
             await app.run(read_stream, write_stream, app.create_initialization_options())
     finally:
-        pending = [
-            state.get("task") for state in sync_tasks.values() if state.get("task") is not None
-        ]
-        for task in pending:
-            if not task.done():
-                task.cancel()
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
-        if adapter:
-            await adapter.close()
+        try:
+            pending = [
+                state.get("task") for state in sync_tasks.values() if state.get("task") is not None
+            ]
+            for task in pending:
+                if not task.done():
+                    task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            for sync_id, state in sync_tasks.items():
+                if state["status"] in {"queued", "running"}:
+                    try:
+                        _save_job(sync_id, status="cancelled", finished_at=datetime.now(UTC).isoformat())
+                    finally:
+                        _release_sync(sync_id)
+        finally:
+            # Even a journal write failure must release the HTTP client and database lock.
+            try:
+                if adapter:
+                    await adapter.close()
+            finally:
+                sync_history.close()

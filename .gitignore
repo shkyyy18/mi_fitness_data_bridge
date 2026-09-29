@@ -4,6 +4,8 @@
 *.db
 *.sqlite
 *.sqlite3
+*.mcp.lock
+.test-tmp/
 *.jsonl
 config.json
 credentials.json

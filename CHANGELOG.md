@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-09-29
+
+### Added
+
+- Add `cancel_sync` for background MCP jobs. Cancellation preserves records already committed to SQLite; counts may be incomplete. Foreground jobs cannot be cancelled through this tool.
+- Add `query_sync_history` and persistent, account-scoped MCP sync status in local SQLite. Retain the latest 500 terminal jobs plus active jobs; exclude CLI syncs, raw exception messages, credentials and health payloads. Mark unfinished jobs `interrupted` after restart rather than automatically resuming them.
+- Add `limit`/`offset` and `data.pagination` to ten record-list query tools, with stable SQL ordering for raw samples and events. Keep filters unchanged and avoid syncing between pages; use `next_offset` until it is null. Sleep main-session statistics and data-quality metadata still describe the full selected date range.
+- Add an OS-released per-database MCP server lock and cleanup regression tests for cancellation and failed startup/shutdown.
+
+### Changed
+
+- Advertise `query_daily_activity` and `query_workout_series` for consistent query naming. Existing `get_daily_summary` and `workout_series` calls remain supported, but legacy aliases are not duplicated in the 17-tool catalog.
+- Clarify when to use daily activity rows, single-metric trends, raw body measurements, ordinary heart-rate samples and workout-specific curves.
+- Align English/Chinese README and MCP contracts with current pagination and sync lifecycle behavior; guard tool catalog/documentation consistency with synthetic tests.
+
+### Validation and limitations
+
+- Validation uses synthetic data and mocked cloud responses only, not real Xiaomi credentials, accounts or health records. This release does not establish device/region compatibility.
+- Glama re-evaluation is external and pending; the changes address reported deductions but do not guarantee a full score.
+- The project remains unofficial, experimental and local-first. No public service, credential proxy, telemetry or automatic cloud sync is introduced.
+
 ## [0.3.2] - 2026-09-23
 
 - Document all 15 MCP tools with purpose, alternatives, local/cloud effects, response shapes, units, parameter defaults and constraints; publish server guidance and explicit tool safety annotations without renaming existing tools.

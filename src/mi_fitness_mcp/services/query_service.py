@@ -756,6 +756,7 @@ class QueryService:
         end_date: str,
         sample_type: str | None = None,
         limit: int | None = None,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         records = self.db.query_heart_rate_samples(
             self.user_id,
@@ -763,6 +764,7 @@ class QueryService:
             end_date,
             sample_type=sample_type,
             limit=limit if limit is not None else DEFAULT_QUERY_LIMIT,
+            offset=offset,
         )
 
         return [
@@ -779,12 +781,14 @@ class QueryService:
         start_date: str,
         end_date: str,
         limit: int | None = None,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         records = self.db.query_spo2_samples(
             self.user_id,
             start_date,
             end_date,
             limit=limit if limit is not None else DEFAULT_QUERY_LIMIT,
+            offset=offset,
         )
         return [
             {
@@ -800,6 +804,7 @@ class QueryService:
         end_date: str,
         level: str | None = None,
         limit: int | None = None,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         records = self.db.query_stress_samples(
             self.user_id,
@@ -807,6 +812,7 @@ class QueryService:
             end_date,
             level=level,
             limit=limit if limit is not None else DEFAULT_QUERY_LIMIT,
+            offset=offset,
         )
         return [
             {
@@ -822,12 +828,14 @@ class QueryService:
         start_date: str,
         end_date: str,
         limit: int | None = None,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         records = self.db.query_abnormal_heart_beat_events(
             self.user_id,
             start_date,
             end_date,
             limit=limit if limit is not None else DEFAULT_QUERY_LIMIT,
+            offset=offset,
         )
         return [
             {
