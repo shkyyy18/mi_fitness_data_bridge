@@ -798,13 +798,19 @@ class QueryService:
         downsampled = source_points > max_points
         if downsampled:
             # 自适应桶：尊重请求的 resolution，除非会超出 max_points。
-            bucket_seconds = max(resolution, math.ceil(duration_seconds / max_points))
+            # Device detail may start before the report or extend past its end.
+            # Anchor to the actual span so even max_points=1 and negative offsets
+            # respect the hard output cap without discarding samples or stats.
+            bucket_anchor = min(0, offsets[0])
+            span_seconds = max(duration_seconds, offsets[-1] - bucket_anchor + 1)
+            bucket_seconds = max(resolution, math.ceil(span_seconds / max_points))
             buckets: dict[int, list[float]] = {}
             for offset, value in pairs:
-                buckets.setdefault(offset // bucket_seconds, []).append(value)
+                key = (offset - bucket_anchor) // bucket_seconds
+                buckets.setdefault(key, []).append(value)
             points = [
                 {
-                    "t": key * bucket_seconds,
+                    "t": bucket_anchor + key * bucket_seconds,
                     "value": round(statistics.fmean(vs), 1),
                     "min": min(vs),
                     "max": max(vs),
@@ -985,6 +991,7 @@ class QueryService:
         end_date: str,
         sample_type: str | None = None,
         limit: int | None = None,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         records = self.db.query_heart_rate_samples(
             self.user_id,
@@ -992,6 +999,7 @@ class QueryService:
             end_date,
             sample_type=sample_type,
             limit=limit if limit is not None else DEFAULT_QUERY_LIMIT,
+            offset=offset,
         )
 
         return [
@@ -1008,12 +1016,14 @@ class QueryService:
         start_date: str,
         end_date: str,
         limit: int | None = None,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         records = self.db.query_spo2_samples(
             self.user_id,
             start_date,
             end_date,
             limit=limit if limit is not None else DEFAULT_QUERY_LIMIT,
+            offset=offset,
         )
         return [
             {
@@ -1029,6 +1039,7 @@ class QueryService:
         end_date: str,
         level: str | None = None,
         limit: int | None = None,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         records = self.db.query_stress_samples(
             self.user_id,
@@ -1036,6 +1047,7 @@ class QueryService:
             end_date,
             level=level,
             limit=limit if limit is not None else DEFAULT_QUERY_LIMIT,
+            offset=offset,
         )
         return [
             {
@@ -1051,12 +1063,14 @@ class QueryService:
         start_date: str,
         end_date: str,
         limit: int | None = None,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         records = self.db.query_abnormal_heart_beat_events(
             self.user_id,
             start_date,
             end_date,
             limit=limit if limit is not None else DEFAULT_QUERY_LIMIT,
+            offset=offset,
         )
         return [
             {

@@ -3,7 +3,7 @@
   "name": "io.github.shkyyy18/mi_fitness_data_bridge",
   "title": "Mi Fitness Data Bridge",
   "description": "Export your own Mi Fitness and related Xiaomi-device health data to SQLite/JSON/CSV for local and AI-assisted analysis.",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "repository": {
     "url": "https://github.com/shkyyy18/mi_fitness_data_bridge",
     "source": "github"

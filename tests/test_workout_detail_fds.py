@@ -643,3 +643,71 @@ async def test_sync_workout_detail_reports_partial_when_all_fail(tmp_path):
     assert result["status"] == "partial"
     assert result["added"] == 0 and result["updated"] == 0
     assert result["bad_records"][0]["record_id"] == "wo-1"
+
+
+@pytest.mark.parametrize("validity", [b"\xcc\xcc", b"\x00\x00"])
+def test_sport_record_rejects_impossible_sample_count(validity):
+    header = struct.pack("<IBBB", 1789998701, 32, 2, 1) + b"\x00" + validity
+    body = b"\x00" * 4 + struct.pack("<II", 0xffffffff, 1789998701) + b"\x00"
+    with pytest.raises(FdsParseError, match="sample count"):
+        parse_sport_record(header + body, 1)
+
+
+def test_sport_record_rejects_truncated_samples():
+    with pytest.raises(FdsParseError, match="sample count"):
+        parse_sport_record(_sport_blob()[:-1], 1)
+
+
+@pytest.mark.asyncio
+async def test_failed_gps_parse_leaves_workout_uncached_and_retries(tmp_path, monkeypatch):
+    from mi_fitness_mcp.services.sync_service import SyncService
+
+    db = Database(tmp_path / "mi_fitness.db")
+    _seed_workout(db, "u-1", "wo-1")
+    adapter = MiFitnessCloudAdapter("u-1", "synthetic-unused-token")
+    adapter._connected = True
+    requests = []
+
+    async def request(base_url, api_path, payload, sign_path=None):
+        requests.append(payload)
+        return {
+            f"{item['suffix']}_{item['timestamp']}": {
+                "url": f"https://synthetic.invalid/{'sport' if i == 0 else 'gps'}",
+                "obj_key": "synthetic-unused-key",
+            }
+            for i, item in enumerate(payload["items"])
+        }
+
+    async def download(url, obj_key):
+        return _sport_blob() if url.endswith("/sport") else b"bad"
+
+    monkeypatch.setattr(adapter, "is_connected", lambda: True)
+    monkeypatch.setattr(adapter, "_request", request)
+    monkeypatch.setattr(adapter, "_download_fds_blob", download)
+    service = SyncService(adapter, db)
+    for _ in range(2):
+        result = await service.sync_data_type("workout_detail")
+        assert result["status"] == "partial"
+        assert result["added"] == 0
+        assert result["bad_records"][0]["error_type"] == "FdsParseError"
+        assert db.workout_detail_counts("u-1", "wo-1") == (0, 0)
+    assert len(requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_workout_detail_mixed_success_reports_partial(tmp_path):
+    from mi_fitness_mcp.services.sync_service import SyncService
+
+    class MixedAdapter(_DetailAdapter):
+        async def fetch_workout_detail(self, workout):
+            if workout["workout_id"] == "wo-bad":
+                raise RuntimeError("synthetic detail failure")
+            return [_sample(workout["workout_id"], 0)], []
+
+    db = Database(tmp_path / "mi_fitness.db")
+    for workout_id in ["wo-good", "wo-bad"]:
+        _seed_workout(db, "u-1", workout_id)
+    result = await SyncService(MixedAdapter("u-1", {}), db).sync_data_type("workout_detail")
+    assert result["status"] == "partial"
+    assert result["added"] == 1
+    assert result["bad_records"][0]["record_id"] == "wo-bad"

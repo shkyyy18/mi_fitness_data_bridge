@@ -322,6 +322,18 @@ def _parse_record_body(
         record_count, offset = read_uint(buf, offset, 4)
         start_time, offset = read_uint(buf, offset, 4)
         offset += it_bytes  # IT 摘要段对样本值无用，跳过
+        record_bytes = sum(
+            data_type.byte_size
+            for data_type in config.four_dimen_types
+            if data_type.support_version <= version
+            and valid_map[data_type.type_id].exist
+        )
+        # Reject impossible counts before looping: a truncated/no-channel blob
+        # must not allocate millions of empty samples or become cached as valid.
+        if record_count and (
+            not record_bytes or record_count > (len(buf) - offset) // record_bytes
+        ):
+            raise FdsParseError("FDS sample count exceeds available record bytes")
         records: list[dict[int, int]] = []
         for _ in range(record_count):
             record: dict[int, int] = {}

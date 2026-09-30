@@ -262,7 +262,8 @@ def test_reference_source_caller_provided(service, seeded_db):
 def test_server_tool_roundtrip(service, monkeypatch):
     monkeypatch.setattr(server, "query_service", service)
     tools = asyncio.run(server.list_tools())
-    assert "workout_series" in {tool.name for tool in tools}
+    assert "query_workout_series" in {tool.name for tool in tools}
+    assert "workout_series" not in {tool.name for tool in tools}
 
     content = asyncio.run(
         server.call_tool(

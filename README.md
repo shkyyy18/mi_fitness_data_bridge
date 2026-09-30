@@ -172,7 +172,9 @@ mi-fitness-bridge serve
 mi-fitness-mcp serve
 ```
 
-可用工具包括：`get_connection_status`、`sync_data`、`get_sync_status`、`get_profile`、`get_daily_summary`、`query_metric_series`、`get_data_coverage`、`query_body_measurements`、`query_sleep`、`query_workouts`、`workout_series`、`query_heart_rate`、`query_spo2`、`query_stress` 和 `query_abnormal_heart_beat`。
+可用工具包括：`get_connection_status`、`sync_data`、`get_sync_status`、`cancel_sync`、`query_sync_history`、`get_profile`、`query_daily_activity`、`query_metric_series`、`get_data_coverage`、`query_body_measurements`、`query_sleep`、`query_workouts`、`query_workout_series`、`workout_detail_series`、`query_heart_rate`、`query_spo2`、`query_stress` 和 `query_abnormal_heart_beat`。旧名称 `get_daily_summary` 和 `workout_series` 仍可作为兼容调用，但不会出现在工具目录中。
+
+记录列表查询支持 `limit`/`offset` 分页，响应中的 `data.pagination.next_offset` 为下一页位置；翻页时保持筛选条件不变，且不要执行同步。单次运动曲线使用 `query_workout_series` 的 `max_points` 控制点数，不使用列表分页。后台 MCP 同步可用 `cancel_sync` 停止，已写入的记录不会回滚。任务状态保存在本地 SQLite 中，重启后可用 `get_sync_status` 或 `query_sync_history` 查询；保留最近 500 个终态 MCP 任务及活动任务，不包含 CLI 同步。重启时未完成任务会标记为 `interrupted`，不会自动续跑。同一数据库同时只允许一个 MCP 服务进程使用。
 
 服务通过标准输入/输出通信，应由本机 MCP 客户端启动和管理；直接在终端运行时看似“卡住”是因为它正在等待 MCP 消息。它不会在启动时连接小米，只有状态检查或同步操作才按需建立云端连接。不要将它暴露为公网服务或凭证代理。
 
@@ -188,6 +190,10 @@ mi-fitness-mcp serve
   }
 }
 ```
+
+
+完成 `workout_detail` 同步后，可通过 `workout_detail_series` 查询设备提供的秒级心率、步频、配速及速度曲线，并通过 `workout_gps` 导出 GPS 轨迹。默认全量同步会回填缓存中缺少明细的运动，`force_full_sync` 可重新抓取已覆盖的运动。非官方 FDS 协议仍受设备及固件版本限制，详见 [运动明细可行性说明](docs/workout-detail-feasibility.md)。
+
 
 ## 作为 Python 依赖使用
 

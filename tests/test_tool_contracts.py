@@ -1,6 +1,7 @@
 """Public MCP contracts: synthetic data only, no setup/keyring/cloud access."""
 
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -17,13 +18,15 @@ EXAMPLES = {
     "sync_data": {"data_types": ["sleep"], **DATE_RANGE, "background": True},
     "get_sync_status": {"sync_id": "synthetic-job"},
     "get_profile": {},
-    "get_daily_summary": {"date": "2026-01-15"},
+    "query_daily_activity": {"date": "2026-01-15"},
     "query_metric_series": {"metric": "weight_kg", **DATE_RANGE},
     "query_heart_rate": {**DATE_RANGE, "limit": 10},
     "query_body_measurements": {**DATE_RANGE, "latest_only": True},
     "query_sleep": {**DATE_RANGE, "include_naps": False},
     "query_workouts": {**DATE_RANGE, "min_duration": 20},
-    "workout_series": {"workout_id": "synthetic-workout", "max_points": 100},
+    "query_workout_series": {"workout_id": "synthetic-workout", "max_points": 100},
+    "cancel_sync": {"sync_id": "synthetic-job"},
+    "query_sync_history": {"limit": 20, "offset": 0},
     "workout_detail_series": {"workout_id": "synthetic-workout", "max_points": 100},
     "query_spo2": {**DATE_RANGE, "limit": 10},
     "query_stress": {**DATE_RANGE, "level": "low"},
@@ -40,7 +43,7 @@ async def test_wire_catalog_preserves_names_and_documents_every_parameter():
     # Exercise actual SDK serialization, not just Python metadata constants.
     tools = json.loads(result.model_dump_json(by_alias=True))["tools"]
     assert {tool["name"] for tool in tools} == set(EXAMPLES)
-    assert len(tools) == 16
+    assert len(tools) == 18
     for tool in tools:
         name = tool["name"]
         schema = tool["inputSchema"]
@@ -56,7 +59,7 @@ async def test_wire_catalog_preserves_names_and_documents_every_parameter():
         annotations = tool["annotations"]
         cloud = name in {"sync_data", "get_connection_status"}
         assert annotations["openWorldHint"] is cloud
-        assert annotations["readOnlyHint"] is (not cloud)
+        assert annotations["readOnlyHint"] is (not cloud and name != "cancel_sync")
         assert annotations["destructiveHint"] is False
     assert "credentials" in server.app.instructions
     assert "consent" in server.app.instructions
@@ -115,7 +118,7 @@ async def test_invalid_dates_do_not_start_cloud_sync(arguments, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_single_day_precedence_is_preserved(monkeypatch):
-    handler = AsyncMock(return_value={"status": "ok"})
+    handler = AsyncMock(return_value={"status": "ok", "data": {"summaries": []}})
     monkeypatch.setattr(server, "_handle_get_daily_summary", handler)
     result = await server.call_tool(
         "get_daily_summary",
@@ -146,7 +149,27 @@ async def test_cache_response_shapes_match_documentation(name, keys, tmp_path, m
     monkeypatch.setattr(server, "query_service", service)
     # No cloud adapter at all: cached queries must work without one.
     monkeypatch.setattr(server, "adapter", None)
-    response = json.loads((await server.call_tool(name, EXAMPLES[name]))[0].text)
+    canonical = server.TOOL_ALIASES.get(name, name)
+    response = json.loads((await server.call_tool(name, EXAMPLES[canonical]))[0].text)
     assert response["status"] == "ok"
     assert response["source"] == "cache"
+    if name in server.PAGE_KEYS:
+        keys = keys | {"pagination"}
     assert set(response["data"]) == keys
+
+
+@pytest.mark.asyncio
+async def test_documented_catalog_and_pagination_are_current():
+    tools = await server.list_tools()
+    assert len(tools) == 18
+    root = Path(__file__).resolve().parents[1]
+    for filename in ("README.md", "README.en.md", "docs/mcp-tool-contracts.md"):
+        document = (root / filename).read_text(encoding="utf-8")
+        for tool in tools:
+            assert f"`{tool.name}`" in document, (filename, tool.name)
+    for tool in tools:
+        if "offset" in tool.inputSchema["properties"]:
+            contract = json.dumps(tool.model_dump()).lower()
+            assert "no offset" not in contract
+            assert "no pagination" not in contract
+            assert "next_offset" in tool.description

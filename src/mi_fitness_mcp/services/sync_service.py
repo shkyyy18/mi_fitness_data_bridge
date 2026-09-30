@@ -282,11 +282,8 @@ class SyncService:
         except Exception:
             logger.debug("Failed to record workout_detail sync state", exc_info=True)
 
-        # 全部尝试失败时报 partial，避免 CLI/agent 把失败读成成功
-        # （与分块路径的 partial 语义对齐；个别失败仍属 ok，见 bad_records）。
-        status = (
-            "partial" if attempted > 0 and bad_records and added == 0 and updated == 0 else "ok"
-        )
+        # Surface any failed workout rather than presenting mixed success as ok.
+        status = "partial" if attempted > 0 and bad_records else "ok"
         return {
             "status": status,
             "data_type": "workout_detail",

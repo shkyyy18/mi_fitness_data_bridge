@@ -158,3 +158,32 @@ def test_workout_without_detail_returns_empty_envelope(tmp_path):
     assert result["points"] == []
     assert result["stats"] is None
     assert result["data_quality"]["missing_metrics"] == ["heart_rate"]
+
+
+@pytest.mark.parametrize("max_points", [1, 2, 100, 500, 1000])
+def test_detail_output_cap_includes_offsets_outside_report(service, max_points):
+    svc, workout_id = service
+    # This nominal activity is shorter than its device-recorded detail span.
+    with svc.db._get_connection() as conn:
+        conn.execute(
+            "UPDATE workouts SET end_at = ? WHERE user_id = ? AND workout_id = ?",
+            ("2026-09-25T14:09:51", "synthetic-test-user", workout_id),
+        )
+        conn.commit()
+    records = [
+        WorkoutSample(
+            id=f"synthetic-outside-{offset}", provider="mi_fitness",
+            source_type="cloud_session", user_id="synthetic-test-user",
+            workout_id=workout_id, offset_seconds=offset,
+            timestamp=datetime(2026, 9, 25, 14, 1, 31), heart_rate_bpm=160,
+        )
+        for offset in range(-2, 1001)
+    ]
+    svc.db.insert_workout_detail_samples(records)
+    result = svc.get_workout_detail_series(workout_id, resolution=1, max_points=max_points)
+    assert result["returned_points"] <= min(max_points, 500)
+    assert result["source_points"] == 1003
+    assert result["stats"]["avg"] == 160
+    assert sum(p["samples"] for p in result["points"]) == 1003
+    assert result["points"][0]["t"] == -2
+    assert result["downsampled"] is True

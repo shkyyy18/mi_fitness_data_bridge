@@ -1221,7 +1221,9 @@ class MiFitnessCloudAdapter(DataAdapter):
                         )
             except FdsParseError as exc:
                 logger.warning("FDS parse failed for %s: %s", workout_id, exc)
-                continue
+                # Do not return a half-parsed workout: caching one file would
+                # make default sync skip the other failed file permanently.
+                raise
         return samples, gps_points
 
     def _health_base_url(self) -> str:

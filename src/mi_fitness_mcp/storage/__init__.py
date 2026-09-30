@@ -1260,6 +1260,7 @@ class Database:
         end_date: str,
         sample_type: str | None = None,
         limit: int | None = None,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         sql = """
             SELECT * FROM heart_rate_samples
@@ -1270,10 +1271,13 @@ class Database:
         if sample_type:
             sql += " AND sample_type = ?"
             params.append(sample_type)
-        sql += " ORDER BY timestamp"
+        sql += " ORDER BY timestamp, id"
         if limit is not None:
-            sql += " LIMIT ?"
-            params.append(limit)
+            sql += " LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+        elif offset:
+            sql += " LIMIT -1 OFFSET ?"
+            params.append(offset)
         with self._get_connection() as conn:
             rows = conn.execute(sql, params).fetchall()
             return [dict(row) for row in rows]
@@ -1284,17 +1288,21 @@ class Database:
         start_date: str,
         end_date: str,
         limit: int | None = None,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         sql = """
             SELECT * FROM spo2_samples
             WHERE user_id = ?
             AND substr(timestamp, 1, 10) >= ? AND substr(timestamp, 1, 10) <= ?
-            ORDER BY timestamp
+            ORDER BY timestamp, id
         """
         params: list[Any] = [user_id, start_date, end_date]
         if limit is not None:
-            sql += " LIMIT ?"
-            params.append(limit)
+            sql += " LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+        elif offset:
+            sql += " LIMIT -1 OFFSET ?"
+            params.append(offset)
         with self._get_connection() as conn:
             rows = conn.execute(sql, params).fetchall()
             return [dict(row) for row in rows]
@@ -1306,6 +1314,7 @@ class Database:
         end_date: str,
         level: str | None = None,
         limit: int | None = None,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         sql = """
             SELECT * FROM stress_samples
@@ -1316,10 +1325,13 @@ class Database:
         if level:
             sql += " AND level = ?"
             params.append(level)
-        sql += " ORDER BY timestamp"
+        sql += " ORDER BY timestamp, id"
         if limit is not None:
-            sql += " LIMIT ?"
-            params.append(limit)
+            sql += " LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+        elif offset:
+            sql += " LIMIT -1 OFFSET ?"
+            params.append(offset)
         with self._get_connection() as conn:
             rows = conn.execute(sql, params).fetchall()
             return [dict(row) for row in rows]
@@ -1330,17 +1342,21 @@ class Database:
         start_date: str,
         end_date: str,
         limit: int | None = None,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         sql = """
             SELECT * FROM abnormal_heart_beat_events
             WHERE user_id = ?
             AND substr(start_at, 1, 10) >= ? AND substr(start_at, 1, 10) <= ?
-            ORDER BY start_at
+            ORDER BY start_at, id
         """
         params: list[Any] = [user_id, start_date, end_date]
         if limit is not None:
-            sql += " LIMIT ?"
-            params.append(limit)
+            sql += " LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+        elif offset:
+            sql += " LIMIT -1 OFFSET ?"
+            params.append(offset)
         with self._get_connection() as conn:
             rows = conn.execute(sql, params).fetchall()
             return [dict(row) for row in rows]

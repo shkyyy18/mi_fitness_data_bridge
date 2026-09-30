@@ -4,10 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-- Address code-review findings on the workout-detail changeset: per-second samples and GPS points accept slightly negative offsets (device blob timestamps can precede the cloud-reported activity start — previously a pydantic violation discarded the whole workout's detail); the workout-detail sync reports `partial` instead of `ok` when every attempted workout fails; Phase 1 summary and FDS metadata fields parse 0 as a legitimate value instead of collapsing it to NULL (e.g. sea-level altitude, zero anaerobic training effect, blob version 0); child record ids include the user id to rule out cross-user primary-key collisions; `CLAUDE.md` tool counts corrected to 16; feasibility doc no longer claims a required `region_tag` header (verified unnecessary on a real account).
+- Reject truncated/impossible FDS sample counts before allocating records; propagate parse failures so partial files are not cached as completed workouts and remain retryable. Report mixed workout-detail sync failures as `partial`. Regression tests use synthetic blobs only.
+
+- Integrate workout detail with the current 18-tool MCP catalog while preserving renamed query aliases, persistent sync jobs and pagination. Guarantee the workout detail series point cap for negative offsets and detail extending beyond the report window, with regression coverage.
+
+- Address code-review findings on the workout-detail changeset: per-second samples and GPS points accept slightly negative offsets (device blob timestamps can precede the cloud-reported activity start — previously a pydantic violation discarded the whole workout's detail); the workout-detail sync reports `partial` instead of `ok` when every attempted workout fails; Phase 1 summary and FDS metadata fields parse 0 as a legitimate value instead of collapsing it to NULL (e.g. sea-level altitude, zero anaerobic training effect, blob version 0); child record ids include the user id to rule out cross-user primary-key collisions; feasibility doc no longer claims a required `region_tag` header (verified unnecessary on a real account).
 - Known limitations (accepted trade-offs, documented in `docs/workout-detail-feasibility.md`): workouts whose detail fetch yields nothing are retried on each sync by design (self-backfill; cost is one metadata request per missing workout); first-time backfill fetches workouts sequentially under the per-type timeout, which large histories may exceed.
 
-- Add the `workout_detail_series` MCP tool (16 tools total): per-second detail curves (heart_rate/cadence/pace/speed) for one workout from the FDS detail cache, reusing the `agent-safe-series/v1` envelope — numeric second offsets, disclosed downsampling (default 400 points, hard cap 500), full-resolution stats, `time_in_zone` for heart rate, and data quality that counts excluded sensor-zero samples. Workouts without synced detail return an empty series rather than an error. Server instructions and `docs/mcp-tool-contracts.md` updated accordingly.
+- Add the `workout_detail_series` MCP tool (18 tools total): per-second detail curves (heart_rate/cadence/pace/speed) for one workout from the FDS detail cache, reusing the `agent-safe-series/v1` envelope — numeric second offsets, disclosed downsampling (default 400 points, hard cap 500), full-resolution stats, `time_in_zone` for heart rate, and data quality that counts excluded sensor-zero samples. Workouts without synced detail return an empty series rather than an error. Server instructions and `docs/mcp-tool-contracts.md` updated accordingly.
 
 - Fix default (no-date) sync failing with "start_date must not be after end_date" for any data type that already has records from the current day: the resume watermark is a timestamp (e.g. today 16:34) while the range end is computed at midnight, so re-running `mi-fitness-bridge sync` on the same day always failed. The watermark-derived start is now clamped to the end date, re-syncing today's range idempotently.
 
@@ -18,6 +22,27 @@ All notable changes to this project will be documented in this file.
 
 - Enrich `workouts` with summary fields already present in the upstream sport-report payload but not previously stored: min heart rate, valid duration, average/max cadence, stride, speed, minimum pace, altitude statistics (avg/max/min, rise/fall, total climbing), VO2max, aerobic/anaerobic training effect, training load, recovery time and average SpO2. The cloud adapter, cache schema, MCP `query_workouts` output and exports carry these fields when the device reports them; older caches gain the columns through an additive migration and backfill on the next workouts re-sync. Fields may remain null depending on device, firmware and sport type.
 - Also persist the FDS detail-blob addressing metadata per workout (upstream `sid`, `proto_type`, report version, report-level time and 15-minute timezone offset) as preparation for optional second-level workout detail and GPS track retrieval; see `docs/workout-detail-feasibility.md`. No new cloud endpoints are called in this phase.
+
+## [0.3.3] - 2026-09-29
+
+### Added
+
+- Add `cancel_sync` for background MCP jobs. Cancellation preserves records already committed to SQLite; counts may be incomplete. Foreground jobs cannot be cancelled through this tool.
+- Add `query_sync_history` and persistent, account-scoped MCP sync status in local SQLite. Retain the latest 500 terminal jobs plus active jobs; exclude CLI syncs, raw exception messages, credentials and health payloads. Mark unfinished jobs `interrupted` after restart rather than automatically resuming them.
+- Add `limit`/`offset` and `data.pagination` to ten record-list query tools, with stable SQL ordering for raw samples and events. Keep filters unchanged and avoid syncing between pages; use `next_offset` until it is null. Sleep main-session statistics and data-quality metadata still describe the full selected date range.
+- Add an OS-released per-database MCP server lock and cleanup regression tests for cancellation and failed startup/shutdown.
+
+### Changed
+
+- Advertise `query_daily_activity` and `query_workout_series` for consistent query naming. Existing `get_daily_summary` and `workout_series` calls remain supported, but legacy aliases are not duplicated in the 17-tool catalog.
+- Clarify when to use daily activity rows, single-metric trends, raw body measurements, ordinary heart-rate samples and workout-specific curves.
+- Align English/Chinese README and MCP contracts with current pagination and sync lifecycle behavior; guard tool catalog/documentation consistency with synthetic tests.
+
+### Validation and limitations
+
+- Validation uses synthetic data and mocked cloud responses only, not real Xiaomi credentials, accounts or health records. This release does not establish device/region compatibility.
+- Glama re-evaluation is external and pending; the changes address reported deductions but do not guarantee a full score.
+- The project remains unofficial, experimental and local-first. No public service, credential proxy, telemetry or automatic cloud sync is introduced.
 
 ## [0.3.2] - 2026-09-23
 
