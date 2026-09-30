@@ -27,6 +27,7 @@ EXAMPLES = {
     "query_workout_series": {"workout_id": "synthetic-workout", "max_points": 100},
     "cancel_sync": {"sync_id": "synthetic-job"},
     "query_sync_history": {"limit": 20, "offset": 0},
+    "workout_detail_series": {"workout_id": "synthetic-workout", "max_points": 100},
     "query_spo2": {**DATE_RANGE, "limit": 10},
     "query_stress": {**DATE_RANGE, "level": "low"},
     "query_abnormal_heart_beat": DATE_RANGE,
@@ -42,7 +43,7 @@ async def test_wire_catalog_preserves_names_and_documents_every_parameter():
     # Exercise actual SDK serialization, not just Python metadata constants.
     tools = json.loads(result.model_dump_json(by_alias=True))["tools"]
     assert {tool["name"] for tool in tools} == set(EXAMPLES)
-    assert len(tools) == 17
+    assert len(tools) == 18
     for tool in tools:
         name = tool["name"]
         schema = tool["inputSchema"]
@@ -160,7 +161,7 @@ async def test_cache_response_shapes_match_documentation(name, keys, tmp_path, m
 @pytest.mark.asyncio
 async def test_documented_catalog_and_pagination_are_current():
     tools = await server.list_tools()
-    assert len(tools) == 17
+    assert len(tools) == 18
     root = Path(__file__).resolve().parents[1]
     for filename in ("README.md", "README.en.md", "docs/mcp-tool-contracts.md"):
         document = (root / filename).read_text(encoding="utf-8")

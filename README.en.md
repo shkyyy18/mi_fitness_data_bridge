@@ -172,7 +172,7 @@ mi-fitness-bridge serve
 mi-fitness-mcp serve
 ```
 
-Available tools are `get_connection_status`, `sync_data`, `get_sync_status`, `cancel_sync`, `query_sync_history`, `get_profile`, `query_daily_activity`, `query_metric_series`, `get_data_coverage`, `query_body_measurements`, `query_sleep`, `query_workouts`, `query_workout_series`, `query_heart_rate`, `query_spo2`, `query_stress`, and `query_abnormal_heart_beat`. The legacy names `get_daily_summary` and `workout_series` remain callable for compatibility but are not advertised in the tool catalog.
+Available tools are `get_connection_status`, `sync_data`, `get_sync_status`, `cancel_sync`, `query_sync_history`, `get_profile`, `query_daily_activity`, `query_metric_series`, `get_data_coverage`, `query_body_measurements`, `query_sleep`, `query_workouts`, `query_workout_series`, `workout_detail_series`, `query_heart_rate`, `query_spo2`, `query_stress`, and `query_abnormal_heart_beat`. The legacy names `get_daily_summary` and `workout_series` remain callable for compatibility but are not advertised in the tool catalog.
 
 Record-list queries support `limit`/`offset` pagination; `data.pagination.next_offset` indicates the next page. Keep filters unchanged and do not sync between pages. Use `query_workout_series` with `max_points` for a single workout curve instead of list pagination. Background MCP syncs can be stopped with `cancel_sync`; already committed records are preserved. Job statuses are stored in local SQLite and remain accessible after restarting through `get_sync_status` or `query_sync_history`. The journal keeps the latest 500 terminal MCP jobs plus active jobs, excludes CLI syncs, and marks unfinished jobs as `interrupted` on restart rather than automatically resuming them. Only one MCP server may use a given database at a time.
 
@@ -190,6 +190,10 @@ Example client configuration:
   }
 }
 ```
+
+
+Per-second workout curves are available through `workout_detail_series` after syncing `workout_detail`. Supported metrics are heart rate, cadence, pace and speed when the device reports them; GPS tracks can be exported via `workout_gps`. The default full sync backfills cached workouts without detail, and `force_full_sync` re-fetches covered workouts. The unofficial FDS protocol remains device- and firmware-dependent; see [workout detail feasibility](docs/workout-detail-feasibility.md).
+
 
 ## Use as a Python dependency
 

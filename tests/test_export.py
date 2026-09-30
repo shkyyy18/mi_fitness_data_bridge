@@ -183,7 +183,7 @@ def test_csv_export_escapes_formula_after_leading_whitespace(tmp_path):
     with (output / "body_measurements.csv").open(encoding="utf-8-sig", newline="") as handle:
         body_rows = list(csv.DictReader(handle))
     assert body_rows[0]["user_id"] == "'\t+cmd"
-    assert len(written) == 8
+    assert len(written) == 10  # 8 个基础数据集 + workout_detail + workout_gps
 
 
 def test_export_excludes_sensitive_columns_added_to_a_dataset(tmp_path):

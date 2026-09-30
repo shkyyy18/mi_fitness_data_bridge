@@ -25,6 +25,9 @@ dist/
 build/
 *.egg-info/
 
+# AI assistant local files
+CLAUDE.md
+
 # Editors and OS
 .vscode/
 .idea/

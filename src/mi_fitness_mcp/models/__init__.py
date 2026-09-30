@@ -72,6 +72,87 @@ class Workout(BaseEntity):
     avg_pace_sec_per_km: float | None = Field(None, ge=0, description="Average pace")
     max_pace_sec_per_km: float | None = Field(None, ge=0, description="Maximum pace")
     total_steps: int | None = Field(None, ge=0, description="Steps during workout")
+    # 运动报告补充汇总（upstream SportBasicReport；随设备/固件可能缺失）
+    min_heart_rate_bpm: int | None = Field(None, ge=0, description="Minimum heart rate")
+    valid_duration_seconds: int | None = Field(
+        None, ge=0, description="Active duration excluding pauses, as reported"
+    )
+    avg_cadence: int | None = Field(None, ge=0, description="Average step cadence (spm)")
+    max_cadence: int | None = Field(None, ge=0, description="Maximum step cadence (spm)")
+    avg_stride: int | None = Field(None, ge=0, description="Average stride, as reported")
+    avg_speed_mps: float | None = Field(None, ge=0, description="Average speed in m/s")
+    min_pace_sec_per_km: float | None = Field(None, ge=0, description="Minimum pace")
+    avg_height_m: float | None = Field(None, description="Average altitude in meters")
+    max_height_m: float | None = Field(None, description="Maximum altitude in meters")
+    min_height_m: float | None = Field(None, description="Minimum altitude in meters")
+    rise_height_m: float | None = Field(None, ge=0, description="Total elevation gain in meters")
+    fall_height_m: float | None = Field(None, ge=0, description="Total elevation loss in meters")
+    total_climbing_m: float | None = Field(
+        None, ge=0, description="Total climbing as reported, in meters"
+    )
+    vo2max: int | None = Field(None, ge=0, description="VO2max estimate")
+    train_effect: float | None = Field(None, ge=0, description="Aerobic training effect")
+    anaerobic_train_effect: float | None = Field(
+        None, ge=0, description="Anaerobic training effect"
+    )
+    training_load: int | None = Field(None, ge=0, description="Training load")
+    recovery_time: int | None = Field(
+        None, ge=0, description="Recovery time as reported by upstream (unit unverified)"
+    )
+    avg_spo2_pct: int | None = Field(None, ge=0, le=100, description="Average SpO2 percentage")
+    # FDS 明细数据定位元数据（拉取秒级记录/GPS 轨迹所需的 blob 寻址字段）
+    fds_sid: str | None = Field(None, description="Upstream sid used to locate FDS detail blobs")
+    proto_type: int | None = Field(
+        None, ge=0, description="Binary protocol type used for FDS parser dispatch"
+    )
+    report_version: int | None = Field(
+        None, ge=0, description="Sport report version; <=0 means no detail blob exists"
+    )
+    report_time: int | None = Field(
+        None,
+        ge=0,
+        description="Report-level unix timestamp (seconds) used in the FDS data ID",
+    )
+    tz_in_15min: int | None = Field(
+        None, description="Report timezone offset in 15-minute increments"
+    )
+
+
+class WorkoutSample(BaseEntity):
+    """Per-second workout sample parsed from the FDS binary record blob."""
+
+    workout_id: str = Field(description="Provider workout ID this sample belongs to")
+    offset_seconds: int = Field(
+        description="Seconds since workout start; may be slightly negative when the "
+        "device blob timestamps precede the cloud-reported start (e.g. early GPS lock)"
+    )
+    timestamp: datetime = Field(description="Absolute sample time")
+    heart_rate_bpm: int | None = Field(None, ge=0, description="Heart rate in bpm")
+    calories_kcal: float | None = Field(None, ge=0, description="Calories, as reported")
+    distance_m: float | None = Field(None, ge=0, description="Distance in meters")
+    steps: int | None = Field(None, ge=0, description="Cumulative steps, when reported")
+    cadence: int | None = Field(None, ge=0, description="Step cadence in spm, when reported")
+    pace_sec_per_km: float | None = Field(None, ge=0, description="Pace in s/km, when reported")
+    speed_mps: float | None = Field(None, ge=0, description="Speed in m/s, when reported")
+    altitude_m: float | None = Field(None, description="Altitude in meters, when reported")
+
+
+class GpsPoint(BaseEntity):
+    """Single GPS track point parsed from the FDS GPS blob."""
+
+    workout_id: str = Field(description="Provider workout ID this point belongs to")
+    offset_seconds: int = Field(
+        description="Seconds since workout start; may be slightly negative when the "
+        "device blob timestamps precede the cloud-reported start (e.g. early GPS lock)"
+    )
+    timestamp: datetime = Field(description="Absolute point time")
+    latitude: float = Field(ge=-90, le=90, description="GPS latitude")
+    longitude: float = Field(ge=-180, le=180, description="GPS longitude")
+    accuracy: float | None = Field(None, ge=0, description="GPS accuracy")
+    speed_mps: float | None = Field(None, ge=0, description="GPS speed in m/s")
+    gps_source: int | None = Field(None, ge=0, description="GPS source indicator")
+    altitude_m: float | None = Field(None, description="GPS altitude in meters")
+    hdop: float | None = Field(None, ge=0, description="Horizontal dilution of precision")
 
 
 class BodyMeasurement(BaseEntity):

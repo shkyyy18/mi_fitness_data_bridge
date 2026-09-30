@@ -80,6 +80,15 @@ def test_workout_upsert_updates_end_time_type_pace_and_steps(tmp_path):
             avg_pace_sec_per_km=360.5,
             max_pace_sec_per_km=300.0,
             total_steps=12000,
+            min_heart_rate_bpm=121,
+            avg_cadence=168,
+            vo2max=47,
+            rise_height_m=45.0,
+            fds_sid="2198620807",
+            proto_type=1,
+            report_version=2,
+            report_time=1789998701,
+            tz_in_15min=32,
         )
     )
 
@@ -87,11 +96,27 @@ def test_workout_upsert_updates_end_time_type_pace_and_steps(tmp_path):
     with sqlite3.connect(db.db_path) as conn:
         row = conn.execute(
             "SELECT activity_type, end_at, duration_minutes, avg_pace_sec_per_km,"
-            " max_pace_sec_per_km, total_steps FROM workouts WHERE id = 'w-1'"
+            " max_pace_sec_per_km, total_steps, min_heart_rate_bpm, avg_cadence,"
+            " vo2max, rise_height_m, fds_sid, proto_type, report_version,"
+            " report_time, tz_in_15min FROM workouts WHERE id = 'w-1'"
         ).fetchone()
     assert row[0] == "trail_run"
     assert row[1] == "2026-07-01T07:30:00"
-    assert tuple(row[2:]) == (90, 360.5, 300.0, 12000)
+    assert tuple(row[2:]) == (
+        90,
+        360.5,
+        300.0,
+        12000,
+        121,
+        168,
+        47,
+        45.0,
+        "2198620807",
+        1,
+        2,
+        1789998701,
+        32,
+    )
 
 
 def _sleep(**overrides) -> SleepSession:

@@ -63,6 +63,8 @@ Supported dataset names and their date columns:
 | `daily_activity` | `daily_activity` | `date` |
 | `sleep` | `sleep_sessions` | `start_at` |
 | `workouts` | `workouts` | `start_at` |
+| `workout_detail` | `workout_detail_samples` | `timestamp` |
+| `workout_gps` | `workout_gps_points` | `timestamp` |
 | `body_measurements` | `body_measurements` | `timestamp` |
 | `heart_rate` | `heart_rate_samples` | `timestamp` |
 | `spo2` | `spo2_samples` | `timestamp` |

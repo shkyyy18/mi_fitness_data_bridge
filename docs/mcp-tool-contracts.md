@@ -17,7 +17,7 @@ through the MCP SDK request handlers, not just by inspecting this document.
   consent before syncing. It does not delete the database or edit cloud records.
 - `cancel_sync` stops a background MCP job and writes its local job status; it
   does not delete committed records or start new cloud requests. It is not read-only.
-- The other 14 tools read local cache, persistent job state or connected-account
+- The other 15 tools read local cache, persistent job state or connected-account
   metadata; they do not fetch fresh cloud health records. Their annotations are
   `readOnlyHint=true`, `openWorldHint=false`, `destructiveHint=false`.
 - Annotations are hints, not authorization/security enforcement. Sensitive
@@ -28,7 +28,7 @@ through the MCP SDK request handlers, not just by inspecting this document.
 | Need | Tool | Main result |
 | --- | --- | --- |
 | Connectivity / authentication | `get_connection_status` | connected, mode, last sync and available types |
-| Refresh local cache | `sync_data` | sync ID, counts, per-type results; or accepted ID |
+| Refresh local cache | `sync_data` | sync ID, counts, per-type results; or accepted ID. `workout_detail` (default-included; also requestable explicitly) downloads per-workout FDS detail blobs (per-second samples + GPS) for cached workouts in the requested range that do not have detail yet, skipping covered workouts; `force_full_sync` re-fetches them |
 | Poll a job | `get_sync_status` | persistent job state or completed result |
 | Stop a background job | `cancel_sync` | terminal status; committed records preserved |
 | Browse retained MCP jobs | `query_sync_history` | account-scoped jobs and pagination |
@@ -38,14 +38,15 @@ through the MCP SDK request handlers, not just by inspecting this document.
 | Raw heart-rate measurements | `query_heart_rate` | timestamp, bpm, sample_type |
 | Body measurements | `query_body_measurements` | timestamped measurements |
 | Raw sleep and main-sleep statistics | `query_sleep` | sessions, count, main_sessions, metrics, data_quality |
-| Find workouts and IDs | `query_workouts` | workouts, count, data_quality |
+| Find workouts and IDs | `query_workouts` | workouts (summary incl. cadence/altitude/training metrics where the device reports them), count, data_quality |
 | One workout's heart-rate curve | `query_workout_series` | bounded points, stats, coverage, time_in_zone |
+| One workout's per-second detail curve (heart_rate/cadence/pace/speed) | `workout_detail_series` | same agent-safe-series/v1 envelope, from the FDS detail cache (requires `workout_detail` sync); zeros excluded and counted |
 | Oxygen saturation | `query_spo2` | timestamp, spo2_pct |
 | Device stress values | `query_stress` | timestamp, stress_score, level |
 | Device-reported heartbeat events | `query_abnormal_heart_beat` | event ID, start/end, duration_seconds |
 | Available cached dates | `get_data_coverage` | per-type first_date, last_date, days_with_data |
 
-The catalog advertises 17 tools. The former names `get_daily_summary` and
+The catalog advertises 18 tools. The former names `get_daily_summary` and
 `workout_series` remain callable aliases for `query_daily_activity` and
 `query_workout_series`, respectively, but are not advertised as duplicate tools.
 

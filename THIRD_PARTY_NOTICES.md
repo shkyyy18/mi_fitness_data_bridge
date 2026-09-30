@@ -11,4 +11,6 @@ Material changes in this repository include:
 - Adding public-project security, contribution, CI, and privacy documentation.
 - Retaining the `mi_fitness_mcp` Python module and `mi-fitness-mcp` command as compatibility interfaces.
 
+The FDS workout-detail protocol module (`src/mi_fitness_mcp/adapters/fds.py`) is an independent implementation informed by the decompiled-APK protocol notes and MIT-licensed reference code of [kevinkwee/Mi-Fitness-Sync](https://github.com/kevinkwee/Mi-Fitness-Sync) (suffix construction, AES-CBC parameters, per-second record channel tables and GPS record layout). That project's MIT license terms are acknowledged here; no code was copied verbatim beyond protocol constants required for interoperability.
+
 No Xiaomi source code, logo, or official SDK is included. The cloud adapter is an unofficial community implementation.
