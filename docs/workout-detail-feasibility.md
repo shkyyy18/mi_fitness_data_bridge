@@ -77,6 +77,7 @@ genDataTypeByte = (1 << 7) | (proto_type << 2) | fileType   # 即 128 + proto_ty
 
 - **Phase 1（低成本，先做）**：✅ 已完成（2026-09-27）。扩展 `iter_workouts` 解析与 `workouts` 表，步频/海拔/VO2max/训练效果等 summary 字段与 FDS 元数据（`fds_sid/proto_type/report_version/report_time/tz_in_15min`）已入库；老库经增量迁移自动补列，需重新同步 workouts 才会回填数据。零新端点、零新依赖。
 - **Phase 2（核心）**：✅ 已完成并经真实账号验证（2026-09-27）。新增 `adapters/fds.py`（suffix 构造 + `gen_download_url` + AES-CBC 解密 + 秒级样本/GPS 二进制解析），`workout_detail_samples` / `workout_gps_points` 新表落库。`workout_detail` 已纳入默认全量同步（排在 workouts 之后，已有明细的运动自动跳过），也可显式 `sync --type workout_detail` 或 MCP `sync_data data_types=["workout_detail"]` 单独拉取，`force_full_sync` 重拉。导出数据集新增 `workout_detail` / `workout_gps`，`get_data_coverage` 可查询覆盖。实测发现本机（Redmi Watch 类设备）户外跑步上报 **proto_type=22（户外计步类）** 而非 1，解析器按配置驱动实现，当前覆盖 proto_type 1/2/4/5/15（户外共用配置）与 22/23（户外计步/无计步类，含秒级步频、配速、v9 起的海拔通道）；其他运动类型跳过并记日志。
+  - Extended (2026-10): proto_type 3 (indoor running / treadmill; record versions 1, 2 and 6) and proto_type 8/12/16 (free training / strength; record versions 3–5) are parsed as well. Version 6 of the indoor-running table was verified against a real treadmill blob (header plus 3966 × 12-byte records, no remainder); other versions stay skipped.
 - **Phase 3（可选）**：TCX/GPX 导出（对齐现有手动 TCX 工作流），MCP 暴露 `workout_track` 等查询工具（限点设计）。
 
 每阶段独立可交付，Phase 1 完成即解决"汇总缺字段"问题；Phase 2 完成后秒级 GPS/心率/步频可自动化，替代手动 TCX 导出。

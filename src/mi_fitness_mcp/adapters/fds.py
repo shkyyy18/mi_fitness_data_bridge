@@ -267,11 +267,60 @@ STEP_CONFIG = _RecordConfig(
     ],
 )
 
+# Indoor running / treadmill (proto 3). Channel table from upstream IndoorRunRecordParser
+# (kevinkwee/Mi-Fitness-Sync, _INDOOR_RUN_CONFIG). No pause-init block. dataValid: v1/v2 = 2 bytes
+# as upstream; v6 = 4 bytes (8 channels up to v6, one nibble each). The contributor
+# verified this layout against a Xiaomi Smart Band 8 Pro treadmill record.
+INDOOR_RUN_CONFIG = _RecordConfig(
+    proto_types=frozenset({3}),
+    it_summary_types=(
+        OneDimenType(41, 1, 2),
+        OneDimenType(43, 4, 4),
+        OneDimenType(78, 4, 8),
+        OneDimenType(55, 2, 7),
+    ),
+    data_valid_len={1: 2, 2: 2, 6: 4},
+    four_dimen_types=[
+        FourDimenType(TYPE_CALORIES, 1, 1, high_start_bit=4, high_bit_count=4),
+        FourDimenType(TYPE_HR, 1, 1),
+        FourDimenType(TYPE_DISTANCE, 1, 1),
+        FourDimenType(40, 1, 3),  # stride
+        FourDimenType(44, 4, 5, high_start_bit=26, high_bit_count=6),  # landing impact
+        FourDimenType(48, 1, 6),  # touchdown/air ratio
+        FourDimenType(TYPE_CADENCE, 1, 6),
+        FourDimenType(TYPE_PACE, 2, 6),
+        FourDimenType(TYPE_RUNNING_POWER, 2, 7),
+        FourDimenType(79, 2, 9),
+        FourDimenType(80, 2, 9),
+    ],
+)
+
+# Free training / strength (proto 8, also 12 and 16 upstream). Four-dimension layout from v3;
+# v1/v2 use a one-dimension layout that is not implemented here (skipped). dataValid as upstream
+# (_FREE_TRAINING_RECORD_VALIDITY); v3 verified against a real strength-training blob.
+FREE_TRAINING_CONFIG = _RecordConfig(
+    proto_types=frozenset({8, 12, 16}),
+    it_summary_types=(
+        OneDimenType(41, 1, 2),
+        OneDimenType(78, 4, 4),
+        OneDimenType(89, 2, 5),
+        OneDimenType(90, 2, 5),
+        OneDimenType(91, 2, 5),
+    ),
+    data_valid_len={3: 2, 4: 2, 5: 2},
+    four_dimen_types=[
+        FourDimenType(TYPE_HR, 1, 3),
+        FourDimenType(TYPE_CALORIES, 1, 3),
+        FourDimenType(38, 1, 3),  # SpO2
+        FourDimenType(39, 1, 3),  # stress
+    ],
+)
+
+_RECORD_CONFIGS = (OUTDOOR_CONFIG, STEP_CONFIG, INDOOR_RUN_CONFIG, FREE_TRAINING_CONFIG)
+
 # 通道表按位置解析；valid_map 以 type_id 为键，重复通道（INTEGER_KM 新旧
 # 两种宽度并存）沿用上游语义：后出现的覆盖前者的有效性位。
-SUPPORTED_RECORD_PROTO_TYPES = frozenset().union(
-    OUTDOOR_CONFIG.proto_types, STEP_CONFIG.proto_types
-)
+SUPPORTED_RECORD_PROTO_TYPES = frozenset().union(*(c.proto_types for c in _RECORD_CONFIGS))
 
 
 def parse_sport_record(decrypted: bytes, proto_type: int) -> list[tuple[int, list[dict[int, int]]]]:
@@ -281,9 +330,7 @@ def parse_sport_record(decrypted: bytes, proto_type: int) -> list[tuple[int, lis
     样本时间为 segment_start + i。blob 可能含多段（对应运动中的暂停）。
     version<1 或配置未收录的 proto_type 返回空列表。
     """
-    config = next(
-        (c for c in (OUTDOOR_CONFIG, STEP_CONFIG) if proto_type in c.proto_types), None
-    )
+    config = next((c for c in _RECORD_CONFIGS if proto_type in c.proto_types), None)
     if config is None:
         logger.info("Skipping FDS sport record: proto_type=%s not supported", proto_type)
         return []

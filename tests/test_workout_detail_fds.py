@@ -112,8 +112,9 @@ def test_sport_record_roundtrip():
 
 
 def test_unsupported_proto_type_returns_empty():
-    blob = struct.pack("<IBBB", 1789998701, 32, 2, 8) + b"\x00" + bytes((0xCC, 0xCC))
-    assert parse_sport_record(blob, 8) == []
+    # proto 9 (swimming) has no channel table here
+    blob = struct.pack("<IBBB", 1789998701, 32, 2, 9) + b"\x00" + bytes((0xCC, 0xCC))
+    assert parse_sport_record(blob, 9) == []
 
 
 def test_gps_record_v1_roundtrip():
