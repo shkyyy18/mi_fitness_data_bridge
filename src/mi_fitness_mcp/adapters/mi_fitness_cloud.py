@@ -4,6 +4,7 @@ import binascii
 import hashlib
 import json
 import logging
+import math
 import os
 import random
 import struct
@@ -1271,8 +1272,18 @@ class MiFitnessCloudAdapter(DataAdapter):
                 # weight 缺失或为 0 的记录没有有效测量值, 直接跳过;
                 # 否则 0 会触发 BodyMeasurement 的 gt=0 校验中断整个生成器。
                 weight_kg = self._optional_float(payload.get("weight"))
-                if weight_kg is None:
+                if weight_kg is None or not math.isfinite(weight_kg) or weight_kg <= 0:
                     continue
+                try:
+                    muscle_rate = self._optional_float(payload.get("muscle_rate"))
+                except (TypeError, ValueError, OverflowError):
+                    muscle_rate = None
+                # Upstream muscle_rate is a percentage, not a mass in kilograms.
+                muscle_mass_kg = (
+                    weight_kg * (muscle_rate / 100.0)
+                    if muscle_rate is not None and 0 < muscle_rate <= 100
+                    else None
+                )
                 measurement = BodyMeasurement(
                     id=f"mi_fitness_weight_{int(item.get('time', 0))}",
                     provider="mi_fitness",
@@ -1284,7 +1295,7 @@ class MiFitnessCloudAdapter(DataAdapter):
                     # 否则 0 会触发 BodyMeasurement 的 gt=0 校验中断整个生成器。
                     bmi=self._optional_float(payload.get("bmi")),
                     body_fat_pct=self._optional_float(payload.get("body_fat_rate")),
-                    muscle_mass_kg=self._optional_float(payload.get("muscle_rate")),
+                    muscle_mass_kg=muscle_mass_kg,
                     water_pct=self._optional_float(payload.get("moisture_rate")),
                     bone_mass_kg=self._optional_float(payload.get("bone_mass")),
                     visceral_fat_score=self._optional_int(payload.get("visceral_fat")),
