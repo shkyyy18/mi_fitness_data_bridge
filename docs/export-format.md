@@ -71,6 +71,25 @@ Supported dataset names and their date columns:
 | `stress` | `stress_samples` | `timestamp` |
 | `abnormal_heart_beat` | `abnormal_heart_beat_events` | `start_at` |
 
+## Body-composition units and older caches
+
+`body_measurements.muscle_mass_kg` is in kilograms. The cloud adapter converts
+upstream `muscle_rate` (a percentage) using `weight_kg * muscle_rate / 100`
+from the same record, without rounding to a new artificial precision. Missing,
+zero-default, non-finite or out-of-range percentages yield `null` (empty CSV).
+The other percentage columns, including `body_fat_pct` and `water_pct`, remain
+percentages.
+
+Before the Issue #20 fix, the adapter stored the percentage directly in the
+kilogram column. Installing the fix or exporting the cache does not retroactively
+repair old rows. After installing a version containing the fix, re-sync
+`body_measurements` with explicit start/end dates covering the affected records,
+then export again and restart any running MCP server. Re-sync updates the same
+rows idempotently; no database deletion or blanket SQL multiplication is needed.
+Rows unavailable upstream remain uncorrected. Do not share real measurements,
+databases, exports or credentials in bug reports. Validation uses synthetic data
+only, not device-specific measurements.
+
 ## Date filtering
 
 The `--start-date` and `--end-date` options must use `YYYY-MM-DD` format. If both are provided, `--start-date` must not be after `--end-date`.

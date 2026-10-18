@@ -162,7 +162,7 @@ class BodyMeasurement(BaseEntity):
     weight_kg: float = Field(gt=0, description="Weight in kilograms")
     bmi: float | None = Field(None, gt=0, description="Body mass index")
     body_fat_pct: float | None = Field(None, ge=0, le=100, description="Body fat percentage")
-    muscle_mass_kg: float | None = Field(None, ge=0, description="Muscle mass")
+    muscle_mass_kg: float | None = Field(None, ge=0, description="Muscle mass in kilograms")
     water_pct: float | None = Field(None, ge=0, le=100, description="Body water percentage")
     bone_mass_kg: float | None = Field(None, ge=0, description="Bone mass")
     visceral_fat_score: int | None = Field(None, ge=0, description="Visceral fat level")
