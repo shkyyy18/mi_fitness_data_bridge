@@ -163,7 +163,7 @@ def test_doctor_exits_nonzero_when_cloud_connection_fails(monkeypatch, tmp_path,
 
     assert exc_info.value.code == 1
     assert closed == [True]
-    assert "连接状态： ❌" in capsys.readouterr().out
+    assert "连接状态： [X]" in capsys.readouterr().out
 
 def test_health_check_honors_timeout_and_closes_adapter():
     class SlowAdapter:
