@@ -38,7 +38,7 @@ def _apply_database_override(config: Config, args) -> Config:
 def _warn_on_weak_keyring() -> None:
     warning = keyring_backend_warning()
     if warning:
-        print(f"⚠️  警告： {warning}")
+        print(f"[WARN] 警告： {warning}")
         print()
 
 
@@ -86,12 +86,12 @@ def cmd_setup(args):
     pass_token = getpass.getpass("Mi Fitness passToken： ").strip()
     region = input("区域 [cn]： ").strip() or "cn"
     if not user_id or not pass_token:
-        print("❌ 必须提供 user_id 和 passToken")
+        print("[X] 必须提供 user_id 和 passToken")
         sys.exit(1)
     save_mi_fitness_token(user_id, pass_token)
     config = Config(mode="mi_fitness_cloud", region=region)
     save_config(config)
-    print("✅ Mi Fitness 配置已保存！")
+    print("[OK] Mi Fitness 配置已保存！")
 
 
 def cmd_doctor(args):
@@ -102,7 +102,7 @@ def cmd_doctor(args):
     print(f"配置文件： {config_path}")
 
     if not config_path.exists():
-        print("❌ 未找到配置文件")
+        print("[X] 未找到配置文件")
         print(f"   请运行： {PROGRAM_NAME} setup")
         print("   user_id / passToken 的获取方法见 README「配置」一节的")
         print("   「如何获取 user_id 和 passToken」（README.en.md → Configure →")
@@ -112,31 +112,31 @@ def cmd_doctor(args):
     healthy = True
     try:
         config = _apply_database_override(load_config(), args)
-        print("✅ 配置已加载")
+        print("[OK] 配置已加载")
         _warn_on_weak_keyring()
         print(f"   模式： {config.mode}")
         if config.mode == "not_configured":
-            print("❌ 服务尚未配置")
+            print("[X] 服务尚未配置")
             print(f"   请运行： {PROGRAM_NAME} setup")
             healthy = False
 
         user_id, pass_token = load_mi_fitness_token()
         if user_id and pass_token:
-            print("✅ 已找到 Mi Fitness 凭据")
+            print("[OK] 已找到 Mi Fitness 凭据")
             print(f"   User ID: {mask_account_id(user_id)}")
             print(f"   Region: {config.region}")
             adapter = _create_cloud_adapter(user_id, pass_token, config)
             connected, data_types, region = asyncio.run(
                 _check_adapter_health(adapter, config.health_check_timeout_seconds)
             )
-            print(f"   连接状态： {'✅' if connected else '❌'}")
+            print(f"   连接状态： {'[OK]' if connected else '[X]'}")
             if connected:
                 print(f"   识别到的区域： {region}")
                 print(f"   数据类型： {', '.join(data_types)}")
             else:
                 healthy = False
         else:
-            print("❌ 未找到 Mi Fitness 凭据")
+            print("[X] 未找到 Mi Fitness 凭据")
             print(f"   请运行： {PROGRAM_NAME} setup")
             healthy = False
 
@@ -145,16 +145,16 @@ def cmd_doctor(args):
         if resolve_database_path(getattr(args, "db", None)) is not None:
             # 非默认路径（--db 或 MI_FITNESS_DB_PATH）：Windows 上本工具不会为
             # 自定义位置设置 ACL，只提醒用户自行确认，不写 icacls。
-            print("⚠️  警告： 正在使用非默认数据库路径（--db 或 MI_FITNESS_DB_PATH）")
+            print("[WARN] 警告： 正在使用非默认数据库路径（--db 或 MI_FITNESS_DB_PATH）")
             print("   Windows 下自定义路径不会自动收紧 ACL，请自行确认该数据库文件")
             print("   仅当前用户可读写（可用 icacls 检查）。")
         if config.database_path.exists():
             Database(config.database_path)
-            print("✅ 数据库可用")
+            print("[OK] 数据库可用")
         else:
-            print("ℹ️  数据库将在首次运行时创建")
+            print("[INFO] 数据库将在首次运行时创建")
     except Exception as e:
-        print(f"❌ 加载配置失败： {e}")
+        print(f"[X] 加载配置失败： {e}")
         sys.exit(1)
 
     if not healthy:
@@ -169,17 +169,17 @@ async def cmd_sync_async(args):
     try:
         config = _apply_database_override(load_config(), args)
     except Exception as e:
-        print(f"❌ 加载配置失败： {e}")
+        print(f"[X] 加载配置失败： {e}")
         sys.exit(1)
 
     if config.mode == "not_configured":
-        print("❌ 服务尚未配置")
+        print("[X] 服务尚未配置")
         print(f"   请运行： {PROGRAM_NAME} setup")
         sys.exit(1)
 
     user_id, pass_token = load_mi_fitness_token()
     if not user_id or not pass_token:
-        print("❌ 未找到 Mi Fitness 凭据")
+        print("[X] 未找到 Mi Fitness 凭据")
         print(f"   请运行： {PROGRAM_NAME} setup")
         sys.exit(1)
 
@@ -187,7 +187,7 @@ async def cmd_sync_async(args):
     adapter = _create_cloud_adapter(user_id, pass_token, config)
     try:
         if not await adapter.connect():
-            print("❌ 无法连接到 Mi Fitness API")
+            print("[X] 无法连接到 Mi Fitness API")
             sys.exit(1)
 
         sync_service = SyncService(
@@ -213,12 +213,12 @@ async def cmd_sync_async(args):
                 status = result.get("status", "ok")
                 if status == "ok":
                     print(
-                        f"✅ {data_type}: 新增 {result['added']} 条，"
+                        f"[OK] {data_type}: 新增 {result['added']} 条，"
                         f"更新 {result['updated']} 条"
                     )
                 else:
                     had_failures = True
-                    marker = "\u26a0\ufe0f" if status == "partial" else "\u274c"
+                    marker = "[WARN]" if status == "partial" else "[X]"
                     error = result.get("error", "no error detail")
                     print(
                         f"{marker} {data_type}: status={status}, "
@@ -227,7 +227,7 @@ async def cmd_sync_async(args):
                     )
             except Exception as e:
                 had_failures = True
-                print(f"❌ {data_type}: {e}")
+                print(f"[X] {data_type}: {e}")
 
         print()
         if had_failures:
