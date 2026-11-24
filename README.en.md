@@ -12,6 +12,19 @@
 
 **[▶ Try the synthetic export demo — no login](https://shkyyy18.github.io/mi_fitness_data_bridge/?lang=en)** · [Compatibility and limitations](docs/compatibility.md) · [中文](README.md)
 
+## Privacy and MCP: will my data become public?
+
+**With the local usage provided by this project, publishing the source code or starting MCP does not automatically make your account, credentials or health records public on the internet.** This is not a hosted health-data service. However, “stored locally” does not mean “no risk of disclosure.”
+
+- **Where is the data stored?** The connector reads data you are authorized to access from Xiaomi's cloud, stores synchronized records in SQLite on the computer running it, and exports local JSON / CSV files. Credentials are saved through the local keyring interface; their protection depends on the operating system and keyring backend. The project has no feature that automatically uploads these contents to GitHub or a maintainer-operated server. Synchronization still communicates with Xiaomi's cloud, so the whole workflow is not offline.
+- **Does MCP open a public port?** The current `serve` command uses local standard input/output (stdio), with no HTTP / SSE server endpoint. A public repository, MCP directory listing or synthetic demo page does not publish the MCP process on your computer. Do not add public forwarding, remote gateways or hosted credential proxies; those deployments are outside the project's security model.
+- **What can an AI client see?** A connected MCP client can call the available tools and receive the corresponding health data. It may then send results to a cloud model or retain them in conversation history. This is not the same as making data public to everyone, but it goes beyond local-only storage. Use trusted clients and review tool permissions, model-provider data handling and conversation retention. MCP does not need to run if you only want backups or exports.
+- **Is hiding account details enough?** No. Heart rate, sleep, weight and other records remain sensitive even without a name or account identifier; exports may also contain a plaintext `user_id`. Do not submit credentials, databases, exports, raw logs or health screenshots to repositories, issues, public mailing lists or shared folders. `.gitignore` helps prevent accidental commits; it neither removes Git history nor prevents other forms of file sharing.
+
+**About login:** The current CLI uses interactive `setup` with an existing `user_id` and `passToken`. This project itself does not provide QR-code login or one-click authorization. If you obtain credentials through another tool, assess that step's data flow and security separately; this project's local-storage behavior cannot guarantee its safety. See the [credential prerequisites](docs/compatibility.md).
+
+In short: **public source code does not mean public personal data; local MCP does not mean an entirely offline AI workflow.** This describes the current implementation, not a zero-risk guarantee for devices, third-party clients or every deployment. Report security concerns privately as described in [SECURITY.md](SECURITY.md), without real credentials or health records.
+
 ## See the output before connecting an account
 
 - **Just exploring?** Open the static demo, switch between activity, sleep, workout and body samples, and download synthetic CSV / JSON. No installation, account or token.
